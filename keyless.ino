@@ -383,8 +383,9 @@ void detectwifi() {
         waktuMulaiHilang = millis();
         sedangMencari = true;
       }
-      if (millis() - waktuMulaiHilang >= 60000) {
-        Serial.println("STATUS: Motor ditinggal 1 menit. ESP32 BERHENTI SCAN WiFi total.");
+      // DIUBAH MENJADI 10 DETIK (10000 milidetik)
+      if (millis() - waktuMulaiHilang >= 10000) {
+        Serial.println("STATUS: Tidak ada sinyal selama 10 detik. ESP32 masuk mode standby.");
         berhentiTotalScan = true; 
       }
     }
@@ -405,7 +406,7 @@ void setup() {
   pinMode(PIN_BUZZER, OUTPUT);
   digitalWrite(PIN_BUZZER, LOW);         
 
-  pinMode(PIN_SIMULASI_GETAR, INPUT); // Menggunakan INPUT biasa untuk Active HIGH (sesuai modul getar Anda)
+  pinMode(PIN_SIMULASI_GETAR, INPUT); 
 
   loadConfigList();
   setupWebServer();
@@ -419,7 +420,6 @@ void loop() {
   }
 
   if (berhentiTotalScan) {
-    // Sensor Getar Active HIGH (Bergetar = HIGH)
     if (digitalRead(PIN_SIMULASI_GETAR) == HIGH) { 
       Serial.println("\n[WAKE UP] Guncangan terdeteksi! ESP32 bangun...");
       bunyiWakeup(); 
