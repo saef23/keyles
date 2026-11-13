@@ -1,3 +1,5 @@
+Berikut adalah kode lengkap terbaru yang sudah diperbarui dengan pemberian toleransi kegagalan WiFi (3 kali berturut-turut).
+Dengan perbaikan ini, jika sinyal HP Anda sempat fluktuatif atau tersendat sesaat saat di dalam saku, relay tidak akan langsung kedip/mati-hidup, melainkan tetap terkunci ON dengan stabil.
 #include "WiFi.h"
 #include <Preferences.h>
 #include <SPI.h>
@@ -32,6 +34,10 @@ unsigned long waktuMulaiHilang = 0;
 bool sedangMencari = false;
 bool berhentiTotalScan = false;
 bool statusTerdeteksiSebelumnya = false;
+
+// Variabel Toleransi Stabilitas WiFi (Mencegah Relay Kedip/Mati-Hidup)
+int hitungGagalScanWiFi = 0;             
+const int BATAS_TOLERANSI_WIFI = 3;    // Harus gagal 3 kali berturut-turut baru relay dimatikan
 
 // Variabel Anti-Spam / Filter Sensor Getar
 unsigned long waktuGetarMulai = 0;
@@ -307,6 +313,7 @@ bool cekRFID() {
       digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
       bunyiBuzzerBuka();
       berhentiTotalScan = false; 
+      hitungGagalScanWiFi = 0;
       
       // NYALAKAN KEMBALI WIFI AP SAAT BANGUN VIA RFID
       WiFi.mode(WIFI_AP);
@@ -343,7 +350,7 @@ bool cekRFID() {
   return false;
 }
 
-// ==================== DETEKSI WIFI ====================
+// ==================== DETEKSI WIFI (DENGAN TOLERANSI STABILITAS) ====================
 void detectwifi() {
   if (berhentiTotalScan) return; 
 
@@ -365,26 +372,37 @@ void detectwifi() {
   WiFi.scanDelete();
 
   if (found) {
+    // JIKA HP TERDETEKSI: Langsung ON-kan relay & RESET counter gagal
     runDetected(); 
+    hitungGagalScanWiFi = 0; 
     waktuMulaiHilang = 0;
     sedangMencari = false;
   } else {
-    runNotDetected(); 
+    // JIKA HP TIDAK TERDETEKSI DALAM 1 SCAN
+    hitungGagalScanWiFi++; 
     
-    if (!sedangMencari) {
-      waktuMulaiHilang = millis();
-      sedangMencari = true;
-    }
-    
-    // Masuk mode standby jika dalam 10 detik HP tidak ditemukan
-    if (millis() - waktuMulaiHilang >= 10000) {
-      Serial.println("STATUS: Tidak ada sinyal selama 10 detik. ESP32 masuk mode standby.");
-      berhentiTotalScan = true; 
-      sedangMencari = false;
+    // Relay baru akan dimatikan jika sudah GAGAL 3 KALI BERTURUT-TURUT
+    if (hitungGagalScanWiFi >= BATAS_TOLERANSI_WIFI) {
+      runNotDetected(); 
+      
+      if (!sedangMencari) {
+        waktuMulaiHilang = millis();
+        sedangMencari = true;
+      }
+      
+      // Masuk mode standby jika dalam 10 detik setelah gagal 3x HP tetap tidak ditemukan
+      if (millis() - waktuMulaiHilang >= 10000) {
+        Serial.println("STATUS: Tidak ada sinyal selama 10 detik. ESP32 masuk mode standby.");
+        berhentiTotalScan = true; 
+        sedangMencari = false;
+        hitungGagalScanWiFi = 0;
 
-      // MATIKAN TOTAL PEMANCAR WIFI AP AGAR CHIP TIDAK PANAS & HEMAT AKI
-      WiFi.mode(WIFI_OFF);
-      Serial.println("[POWER] WiFi AP dimatikan total untuk mendinginkan ESP32.");
+        // MATIKAN TOTAL PEMANCAR WIFI AP AGAR CHIP TIDAK PANAS & HEMAT AKI
+        WiFi.mode(WIFI_OFF);
+        Serial.println("[POWER] WiFi AP dimatikan total untuk mendinginkan ESP32.");
+      }
+    } else {
+      Serial.printf("[WIFI] Sinyal terputus sementara (%d/%d), mempertahankan relay...\n", hitungGagalScanWiFi, BATAS_TOLERANSI_WIFI);
     }
   }
   
@@ -411,8 +429,6 @@ void setup() {
 }
 
 void loop() {
-  // OTA Handle sudah dihapus total di sini
-
   if (cekRFID()) {
     delay(500);
   }
@@ -432,6 +448,7 @@ void loop() {
           statusTerdeteksiSebelumnya = false; 
           waktuMulaiHilang = millis();
           sedangMendeteksiGetar = false;
+          hitungGagalScanWiFi = 0;
 
           // NYALAKAN KEMBALI WIFI AP SAAT BANGUN DARI GETARAN
           WiFi.mode(WIFI_AP);
@@ -453,3 +470,4 @@ void loop() {
     detectwifi();
   }
 }
+
