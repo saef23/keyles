@@ -4,7 +4,6 @@
 #include <MFRC522.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
-#include <ArduinoOTA.h>
 
 // ==================== KONFIGURASI PIN ====================
 const int PIN_RELAY_KEYLESS  = 2;   // Pin Relay Utama / Kontak (GPIO 2) - ACTIVE HIGH
@@ -131,30 +130,13 @@ void loadConfigList() {
   preferences.end();
 }
 
-// ==================== SETUP WEB SERVER & OTA ====================
+// ==================== SETUP WEB SERVER ====================
 void setupWebServer() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP("ESP32-Keyless-Config", "12345678");
   Serial.println("\n[WEB SERVER] Mode AP Aktif!");
   Serial.println("Sambungkan HP ke WiFi: ESP32-Keyless-Config (Sandi: 12345678)");
   Serial.println("Buka browser dan ketik alamat: http://192.168.4.1");
-
-  ArduinoOTA.setHostname("ESP32-Keyless");
-
-  ArduinoOTA.onStart([]() {
-    Serial.println("[OTA] Memulai proses update program...");
-  });
-  ArduinoOTA.onEnd([]() {
-    Serial.println("\n[OTA] Update selesai! ESP32 akan merestart.");
-  });
-  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("[OTA] Progress: %u%%\r", (progress / (total / 100)));
-  });
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("[OTA Error[%u]: ", error);
-  });
-  
-  ArduinoOTA.begin();
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/html", index_html);
@@ -429,7 +411,7 @@ void setup() {
 }
 
 void loop() {
-  ArduinoOTA.handle();
+  // OTA Handle sudah dihapus total di sini
 
   if (cekRFID()) {
     delay(500);
