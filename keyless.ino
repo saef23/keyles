@@ -1,4 +1,3 @@
-
 #include "WiFi.h"
 #include <Preferences.h>
 #include <SPI.h>
@@ -467,4 +466,3 @@ void loop() {
     detectwifi();
   }
 }
-
