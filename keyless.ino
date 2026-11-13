@@ -37,7 +37,7 @@ bool statusTerdeteksiSebelumnya = false;
 // Variabel Anti-Spam / Filter Sensor Getar
 unsigned long waktuGetarMulai = 0;
 bool sedangMendeteksiGetar = false;
-const unsigned long DURASI_STABIL_GETAR = 150; // Sensor harus stabil HIGH selama 150ms (mencegah getaran angin/palsu)
+const unsigned long DURASI_STABIL_GETAR = 150; // Filter getaran palsu (150ms)
 
 // Mode Web Config / AP Mode
 bool modeSettingWeb = false;
@@ -133,6 +133,7 @@ void loadConfigList() {
 
 // ==================== SETUP WEB SERVER & OTA ====================
 void setupWebServer() {
+  WiFi.mode(WIFI_AP);
   WiFi.softAP("ESP32-Keyless-Config", "12345678");
   Serial.println("\n[WEB SERVER] Mode AP Aktif!");
   Serial.println("Sambungkan HP ke WiFi: ESP32-Keyless-Config (Sandi: 12345678)");
@@ -324,6 +325,12 @@ bool cekRFID() {
       digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
       bunyiBuzzerBuka();
       berhentiTotalScan = false; 
+      
+      // NYALAKAN KEMBALI WIFI AP SAAT BANGUN VIA RFID
+      WiFi.mode(WIFI_AP);
+      WiFi.softAP("ESP32-Keyless-Config", "12345678");
+      Serial.println("[POWER] WiFi AP diaktifkan kembali.");
+
       waktuMulaiHilang = millis();
       statusTerdeteksiSebelumnya = true;
       Serial.println("[RFID ACTION] Kontak dinyalakan via Kartu.");
@@ -331,6 +338,11 @@ bool cekRFID() {
       digitalWrite(PIN_RELAY_KEYLESS, LOW);  
       bunyiBuzzerKunci();
       berhentiTotalScan = true; 
+
+      // MATIKAN WIFI AP SAAT MASUK STANDBY VIA RFID
+      WiFi.mode(WIFI_OFF);
+      Serial.println("[POWER] WiFi AP dimatikan (Chip ESP32 adem & hemat daya).");
+
       statusTerdeteksiSebelumnya = false;
       Serial.println("[RFID ACTION] Kontak dimatikan via Kartu.");
     }
@@ -349,7 +361,7 @@ bool cekRFID() {
   return false;
 }
 
-// ==================== DETEKSI WIFI (DENGAN TIMEOUT 10 DETIK) ====================
+// ==================== DETEKSI WIFI ====================
 void detectwifi() {
   if (berhentiTotalScan) return; 
 
@@ -387,6 +399,10 @@ void detectwifi() {
       Serial.println("STATUS: Tidak ada sinyal selama 10 detik. ESP32 masuk mode standby.");
       berhentiTotalScan = true; 
       sedangMencari = false;
+
+      // MATIKAN TOTAL PEMANCAR WIFI AP AGAR CHIP TIDAK PANAS & HEMAT AKI
+      WiFi.mode(WIFI_OFF);
+      Serial.println("[POWER] WiFi AP dimatikan total untuk mendinginkan ESP32.");
     }
   }
   
@@ -421,13 +437,11 @@ void loop() {
 
   if (berhentiTotalScan) {
     // FILTER SENSOR GETAR (ANTI GETARAN PALSU)
-    // Sensor harus bernilai HIGH secara stabil selama 150 milidetik (DURASI_STABIL_GETAR)
     if (digitalRead(PIN_SIMULASI_GETAR) == HIGH) {
       if (!sedangMendeteksiGetar) {
         waktuGetarMulai = millis();
         sedangMendeteksiGetar = true;
       } else {
-        // Jika sudah bertahan HIGH selama durasi yang ditentukan, baru anggap getaran valid!
         if (millis() - waktuGetarMulai >= DURASI_STABIL_GETAR) {
           Serial.println("\n[WAKE UP] Guncangan valid terdeteksi! ESP32 bangun...");
           bunyiWakeup(); 
@@ -436,15 +450,20 @@ void loop() {
           statusTerdeteksiSebelumnya = false; 
           waktuMulaiHilang = millis();
           sedangMendeteksiGetar = false;
+
+          // NYALAKAN KEMBALI WIFI AP SAAT BANGUN DARI GETARAN
+          WiFi.mode(WIFI_AP);
+          WiFi.softAP("ESP32-Keyless-Config", "12345678");
+          Serial.println("[POWER] WiFi AP diaktifkan kembali.");
+
           delay(1000); 
         }
       }
     } else {
-      // Jika mendadak LOW sebelum waktunya, reset hitungan (artinya cuma getaran angin/palsu)
       sedangMendeteksiGetar = false;
     }
 
-    delay(50); // Cek getaran lebih cepat dan responsif
+    delay(50); 
     return; 
   }
 
