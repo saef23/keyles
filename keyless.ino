@@ -15,12 +15,15 @@ const int RST_PIN = 22;
 const int SS_PIN  = 5;              
 MFRC522 mfrc522(SS_PIN, RST_PIN);   
 
-String SSIDkey[10];
-int RSSItresh[10];
+// ==================== PENYIMPANAN MAKSIMAL 5 ====================
+String SSIDkey[5];
+int RSSItresh[5];
 int keynumber = 0;
 
-String rfidKeyUID = ""; 
+String rfidKeyUID[5];  // Mendukung hingga 5 kartu RFID
+int rfidCount = 0;     // Jumlah kartu yang tersimpan
 bool rfidAktif = false;
+bool rfidKontakState = false; // Status Toggle ON/OFF via RFID
 
 Preferences preferences;
 
@@ -46,19 +49,21 @@ const char index_html[] PROGMEM = R"rawliteral(
   <style>
     body { font-family: Arial; text-align: center; background: #f4f4f9; margin: 0; padding: 20px; }
     h2 { color: #333; }
-    .card { background: white; padding: 20px; margin: 10px auto; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); max-width: 400px; }
-    input, select { width: 90%; padding: 10px; margin: 8px 0; border: 1px solid #ccc; border-radius: 4px; }
+    .card { background: white; padding: 20px; margin: 10px auto; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); max-width: 400px; text-align: left; }
+    input, select { width: 93%; padding: 10px; margin: 8px 0; border: 1px solid #ccc; border-radius: 4px; }
     button { background: #007BFF; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; width: 100%; font-size: 16px; }
     button:hover { background: #0056b3; }
     .btn-danger { background: #dc3545; }
     .btn-danger:hover { background: #bd2130; }
+    ul { padding-left: 20px; }
   </style>
 </head>
 <body>
-  <h2>Pengaturan Keyless ESP32</h2>
+  <h2 style="text-align:center;">Pengaturan Keyless ESP32</h2>
   
   <div class="card">
-    <h3>Daftarkan WiFi Hotspot</h3>
+    <h3>Daftar WiFi Hotspot (Max 5)</h3>
+    <div id="wifiList">Memuat data WiFi...</div>
     <form action="/savewifi" method="POST">
       <input type="text" name="ssid" placeholder="Nama SSID Hotspot HP" required><br>
       <input type="number" name="rssi" placeholder="RSSI Threshold (Contoh: -75)" value="-75" required><br>
@@ -67,19 +72,36 @@ const char index_html[] PROGMEM = R"rawliteral(
   </div>
 
   <div class="card">
-    <h3>Status Kartu RFID</h3>
-    <p id="rfidStatus">Memuat...</p>
-    <a href="/scanrfid"><button>Mode Rekam Kartu RFID Baru</button></a>
+    <h3>Status Kartu RFID (Max 5)</h3>
+    <div id="rfidList">Memuat data RFID...</div>
+    <a href="/scanrfid"><button style="margin-top:10px;">Mode Rekam Kartu RFID Baru</button></a>
   </div>
 
   <div class="card">
     <h3>Kontrol Sistem</h3>
-    <a href="/restart"><button class="btn-danger">Restart ESP32</button></a>
+    <a href="/resetwifi"><button class="btn-danger" style="margin-bottom:8px;">Hapus Semua WiFi & RFID</button></a>
+    <a href="/restart"><button style="background:#6c757d;">Restart ESP32</button></a>
   </div>
 
 <script>
   fetch('/getdata').then(response => response.json()).then(data => {
-    document.getElementById('rfidStatus').innerHTML = data.rfid ? "Terdaftar: " + data.rfid : "Belum ada kartu terdaftar";
+    // Tampilkan WiFi
+    let wifiHTML = "<ul>";
+    if(data.wifis.length === 0) wifiHTML = "<p>Belum ada WiFi terdaftar.</p>";
+    data.wifis.forEach(w => {
+      wifiHTML += `<li><b>${w.ssid}</b> (RSSI: ${w.rssi})</li>`;
+    });
+    wifiHTML += "</ul>";
+    document.getElementById('wifiList').innerHTML = wifiHTML;
+
+    // Tampilkan RFID
+    let rfidHTML = "<ul>";
+    if(data.rfids.length === 0) rfidHTML = "<p>Belum ada kartu terdaftar.</p>";
+    data.rfids.forEach((r, idx) => {
+      rfidHTML += `<li>Kartu ${idx+1}: <code>${r}</code></li>`;
+    });
+    rfidHTML += "</ul>";
+    document.getElementById('rfidList').innerHTML = rfidHTML;
   });
 </script>
 </body>
@@ -89,13 +111,23 @@ const char index_html[] PROGMEM = R"rawliteral(
 // ==================== MEMUAT DATA DARI MEMORI ====================
 void loadConfigList() {
   preferences.begin("wifi_keys", true);
+  
+  // Load WiFi
   keynumber = preferences.getInt("keynumber", 0);
+  if (keynumber > 5) keynumber = 5;
   for (int i = 0; i < keynumber; ++i) {
     SSIDkey[i] = preferences.getString(("ssid" + String(i)).c_str(), "");
     RSSItresh[i] = preferences.getInt(("rssi" + String(i)).c_str(), -100);
   }
-  rfidKeyUID = preferences.getString("rfid_uid", "");
-  rfidAktif = (rfidKeyUID != "");
+
+  // Load RFID
+  rfidCount = preferences.getInt("rfid_count", 0);
+  if (rfidCount > 5) rfidCount = 5;
+  for (int i = 0; i < rfidCount; ++i) {
+    rfidKeyUID[i] = preferences.getString(("rfid_" + String(i)).c_str(), "");
+  }
+  rfidAktif = (rfidCount > 0);
+
   preferences.end();
 }
 
@@ -111,18 +143,32 @@ void setupWebServer() {
   });
 
   server.on("/getdata", HTTP_GET, [](AsyncWebServerRequest *request){
-    String json = "{\"rfid\":\"" + rfidKeyUID + "\"}";
+    String json = "{\"wifis\":[";
+    for(int i=0; i<keynumber; i++){
+      json += "{\"ssid\":\"" + SSIDkey[i] + "\",\"rssi\":" + String(RSSItresh[i]) + "}";
+      if(i < keynumber - 1) json += ",";
+    }
+    json += "],\"rfids\":[";
+    for(int i=0; i<rfidCount; i++){
+      json += "\"" + rfidKeyUID[i] + "\"";
+      if(i < rfidCount - 1) json += ",";
+    }
+    json += "]}";
     request->send(200, "application/json", json);
   });
 
   server.on("/savewifi", HTTP_POST, [](AsyncWebServerRequest *request){
     if (request->hasParam("ssid", true) && request->hasParam("rssi", true)) {
+      if (keynumber >= 5) {
+        request->send(400, "text/html", "<h3>Maksimal 5 WiFi telah tercapai! <a href='/'>Kembali</a></h3>");
+        return;
+      }
       String newSsid = request->getParam("ssid", true)->value();
       int newRssi = request->getParam("rssi", true)->value().toInt();
 
       SSIDkey[keynumber] = newSsid;
       RSSItresh[keynumber] = newRssi;
-      
+
       preferences.begin("wifi_keys", false);
       preferences.putString(("ssid" + String(keynumber)).c_str(), newSsid);
       preferences.putInt(("rssi" + String(keynumber)).c_str(), newRssi);
@@ -137,12 +183,25 @@ void setupWebServer() {
   });
 
   server.on("/scanrfid", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (rfidCount >= 5) {
+      request->send(200, "text/html", "<h3>Maksimal 5 kartu RFID telah tercapai! <a href='/'>Kembali</a></h3>");
+      return;
+    }
     modeSettingWeb = true; 
-    request->send(200, "text/html", "<h3>Silakan tempelkan kartu RFID ke modul sekarang... Cek Serial Monitor untuk konfirmasi. <a href='/'>Kembali</a></h3>");
+    request->send(200, "text/html", "<h3>Silakan tempelkan kartu RFID baru ke modul sekarang... Cek Serial Monitor. <a href='/'>Kembali</a></h3>");
+  });
+
+  server.on("/resetwifi", HTTP_GET, [](AsyncWebServerRequest *request){
+    preferences.begin("wifi_keys", false);
+    preferences.clear();
+    preferences.end();
+    request->send(200, "text/html", "<h3>Semua data WiFi & RFID telah dihapus! Restart ESP32... <a href='/'>Kembali</a></h3>");
+    delay(1000);
+    ESP.restart();
   });
 
   server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(200, "text/html", "<h3>ESP32 Memulai ulang... Silakan sambungkan ulang.</h3>");
+    request->send(200, "text/html", "<h3>ESP32 Memulai ulang...</h3>");
     delay(1000);
     ESP.restart();
   });
@@ -150,38 +209,57 @@ void setupWebServer() {
   server.begin();
 }
 
-// ==================== FUNGSI BANTUAN BUZZER (ACTIVE LOW) ====================
+// ==================== FUNGSI BUZZER DENGAN NADA BERBEDA ====================
+void bunyiWakeup() {
+  digitalWrite(PIN_BUZZER, LOW);  delay(60); 
+  digitalWrite(PIN_BUZZER, HIGH);
+}
+
+void bunyiWifiTerhubung() {
+  digitalWrite(PIN_BUZZER, LOW);  delay(80); 
+  digitalWrite(PIN_BUZZER, HIGH); delay(80); 
+  digitalWrite(PIN_BUZZER, LOW);  delay(80); 
+  digitalWrite(PIN_BUZZER, HIGH);
+}
+
+void bunyiWifiTerputus() {
+  digitalWrite(PIN_BUZZER, LOW);  delay(400); 
+  digitalWrite(PIN_BUZZER, HIGH);
+}
+
 void bunyiBuzzerBuka() {
-  digitalWrite(PIN_BUZZER, LOW);  delay(80); // Nyala (LOW)
-  digitalWrite(PIN_BUZZER, HIGH); delay(80); // Mati (HIGH)
-  digitalWrite(PIN_BUZZER, LOW);  delay(80); // Nyala (LOW)
-  digitalWrite(PIN_BUZZER, HIGH);            // Mati (HIGH)
+  digitalWrite(PIN_BUZZER, LOW);  delay(80); 
+  digitalWrite(PIN_BUZZER, HIGH); delay(80); 
+  digitalWrite(PIN_BUZZER, LOW);  delay(80); 
+  digitalWrite(PIN_BUZZER, HIGH);
 }
 
 void bunyiBuzzerKunci() {
-  digitalWrite(PIN_BUZZER, LOW);  delay(250); // Nyala (LOW)
-  digitalWrite(PIN_BUZZER, HIGH);             // Mati (HIGH)
+  digitalWrite(PIN_BUZZER, LOW);  delay(250); 
+  digitalWrite(PIN_BUZZER, HIGH);
 }
 
+// ==================== AKSI RELAY ====================
 void runDetected() {
   digitalWrite(PIN_RELAY_KEYLESS, LOW);  
   hitungGagalScan = 0;                   
   if (!statusTerdeteksiSebelumnya) {
-    bunyiBuzzerBuka();
+    bunyiWifiTerhubung();
     statusTerdeteksiSebelumnya = true;
-    Serial.println("STATUS: Motor Terbuka (Kontak ON).");
+    Serial.println("STATUS: Motor Terbuka (Kontak ON via WiFi).");
   }
 }
 
 void runNotDetected() {
   digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
   if (statusTerdeteksiSebelumnya) {
-    bunyiBuzzerKunci();
+    bunyiWifiTerputus(); // Suara beda saat putus / deep sleep
     statusTerdeteksiSebelumnya = false;
-    Serial.println("STATUS: Motor Terkunci (Kontak OFF).");
+    Serial.println("STATUS: Motor Terkunci (Kontak OFF / Masuk Deep Sleep).");
   }
 }
 
+// ==================== CEK RFID (MULTI KARTU & TOGGLE) ====================
 bool cekRFID() {
   if (!mfrc522.PICC_IsNewCardPresent() || !mfrc522.PICC_ReadCardSerial()) return false;
 
@@ -193,26 +271,58 @@ bool cekRFID() {
   content.toUpperCase();
   String scannedUID = content.substring(1); 
 
+  // Mode Perekaman Kartu Baru via Web
   if (modeSettingWeb) {
-    rfidKeyUID = scannedUID;
-    rfidAktif = true;
-    preferences.begin("wifi_keys", false);
-    preferences.putString("rfid_uid", rfidKeyUID);
-    preferences.end();
-    Serial.printf("[WEB RFID] Kartu Baru Berhasil Direkam! UID: %s\n", rfidKeyUID.c_str());
-    digitalWrite(PIN_BUZZER, LOW); delay(200); digitalWrite(PIN_BUZZER, HIGH);
+    if (rfidCount < 5) {
+      rfidKeyUID[rfidCount] = scannedUID;
+      rfidCount++;
+      rfidAktif = true;
+      
+      preferences.begin("wifi_keys", false);
+      preferences.putString(("rfid_" + String(rfidCount - 1)).c_str(), scannedUID);
+      preferences.putInt("rfid_count", rfidCount);
+      preferences.end();
+      
+      Serial.printf("[WEB RFID] Kartu ke-%d Berhasil Direkam! UID: %s\n", rfidCount, scannedUID.c_str());
+      digitalWrite(PIN_BUZZER, LOW); delay(200); digitalWrite(PIN_BUZZER, HIGH);
+    }
     modeSettingWeb = false;
     mfrc522.PICC_HaltA();
     mfrc522.PCD_StopCrypto1();
     return true;
   }
 
-  if (rfidAktif && scannedUID == rfidKeyUID) {
+  // Cek apakah kartu terdaftar di antara 5 kartu
+  bool kartuCocok = false;
+  for (int i = 0; i < rfidCount; i++) {
+    if (scannedUID == rfidKeyUID[i]) {
+      kartuCocok = true;
+      break;
+    }
+  }
+
+  if (rfidAktif && kartuCocok) {
     Serial.printf("[RFID] Kartu Dikenali! UID: %s\n", scannedUID.c_str());
-    runDetected();
-    berhentiTotalScan = false; 
-    waktuMulaiHilang = millis();
-    hitungGagalScan = 0;
+    
+    // Sistem Toggle: Tap 1x ON, Tap 1x lagi OFF
+    rfidKontakState = !rfidKontakState; 
+
+    if (rfidKontakState) {
+      digitalWrite(PIN_RELAY_KEYLESS, LOW);  
+      bunyiBuzzerBuka();
+      berhentiTotalScan = false; 
+      waktuMulaiHilang = millis();
+      hitungGagalScan = 0;
+      statusTerdeteksiSebelumnya = true;
+      Serial.println("[RFID ACTION] Kontak dinyalakan via Kartu.");
+    } else {
+      digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
+      bunyiBuzzerKunci();
+      berhentiTotalScan = true; // Istirahat total setelah dimatikan manual
+      statusTerdeteksiSebelumnya = false;
+      Serial.println("[RFID ACTION] Kontak dimatikan via Kartu.");
+    }
+
     mfrc522.PICC_HaltA();
     mfrc522.PCD_StopCrypto1();
     return true;
@@ -227,12 +337,13 @@ bool cekRFID() {
   return false;
 }
 
+// ==================== DETEKSI WIFI ====================
 void detectwifi() {
   if (berhentiTotalScan) return; 
 
   int n = WiFi.scanNetworks();
   bool found = false;
-  
+
   for (int i = 0; i < n; ++i) {
     for (int j = 0; j < keynumber; ++j) {
       if (WiFi.SSID(i) == SSIDkey[j]) {
@@ -250,7 +361,7 @@ void detectwifi() {
     }
     if (found) break;
   }
-  
+
   if (!found) {
     WiFi.scanDelete();
     hitungGagalScan++; 
@@ -276,12 +387,12 @@ void setup() {
 
   SPI.begin();
   mfrc522.PCD_Init();
-  
+
   pinMode(PIN_RELAY_KEYLESS, OUTPUT);
   digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
 
   pinMode(PIN_BUZZER, OUTPUT);
-  digitalWrite(PIN_BUZZER, HIGH);        // Kondisi Mati untuk Active LOW di awal
+  digitalWrite(PIN_BUZZER, HIGH);        
 
   pinMode(PIN_SIMULASI_GETAR, INPUT_PULLUP); 
 
@@ -297,7 +408,7 @@ void loop() {
   if (berhentiTotalScan) {
     if (digitalRead(PIN_SIMULASI_GETAR) == LOW) { 
       Serial.println("\n[WAKE UP] Guncangan terdeteksi! ESP32 bangun...");
-      digitalWrite(PIN_BUZZER, LOW); delay(60); digitalWrite(PIN_BUZZER, HIGH);
+      bunyiWakeup(); // Suara khusus saat bangun
       berhentiTotalScan = false;
       sedangMencari = false;
       hitungGagalScan = 0;
