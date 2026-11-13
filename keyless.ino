@@ -4,11 +4,12 @@
 #include <MFRC522.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include <ArduinoOTA.h>
 
 // ==================== KONFIGURASI PIN ====================
-const int PIN_RELAY_KEYLESS  = 2;   // Pin Relay Utama / Kontak (GPIO 2) - Active LOW
+const int PIN_RELAY_KEYLESS  = 2;   // Pin Relay Utama / Kontak (GPIO 2) - Tetap Active LOW
 const int PIN_SIMULASI_GETAR = 4;   // Pin Sensor Getar / Tombol Bangun (GPIO 4)
-const int PIN_BUZZER         = 25;  // Pin Buzzer Indikator (GPIO 25) - Active LOW
+const int PIN_BUZZER         = 25;  // Pin Buzzer Indikator (GPIO 25) - Diubah ke ACTIVE HIGH
 
 // Konfigurasi Pin RFID RC522 (SPI Default ESP32)
 const int RST_PIN = 22;             
@@ -20,10 +21,10 @@ String SSIDkey[5];
 int RSSItresh[5];
 int keynumber = 0;
 
-String rfidKeyUID[5];  // Mendukung hingga 5 kartu RFID
-int rfidCount = 0;     // Jumlah kartu yang tersimpan
+String rfidKeyUID[5];  
+int rfidCount = 0;     
 bool rfidAktif = false;
-bool rfidKontakState = false; // Status Toggle ON/OFF via RFID
+bool rfidKontakState = false; 
 
 Preferences preferences;
 
@@ -85,7 +86,6 @@ const char index_html[] PROGMEM = R"rawliteral(
 
 <script>
   fetch('/getdata').then(response => response.json()).then(data => {
-    // Tampilkan WiFi
     let wifiHTML = "<ul>";
     if(data.wifis.length === 0) wifiHTML = "<p>Belum ada WiFi terdaftar.</p>";
     data.wifis.forEach(w => {
@@ -94,7 +94,6 @@ const char index_html[] PROGMEM = R"rawliteral(
     wifiHTML += "</ul>";
     document.getElementById('wifiList').innerHTML = wifiHTML;
 
-    // Tampilkan RFID
     let rfidHTML = "<ul>";
     if(data.rfids.length === 0) rfidHTML = "<p>Belum ada kartu terdaftar.</p>";
     data.rfids.forEach((r, idx) => {
@@ -112,7 +111,6 @@ const char index_html[] PROGMEM = R"rawliteral(
 void loadConfigList() {
   preferences.begin("wifi_keys", true);
   
-  // Load WiFi
   keynumber = preferences.getInt("keynumber", 0);
   if (keynumber > 5) keynumber = 5;
   for (int i = 0; i < keynumber; ++i) {
@@ -120,7 +118,6 @@ void loadConfigList() {
     RSSItresh[i] = preferences.getInt(("rssi" + String(i)).c_str(), -100);
   }
 
-  // Load RFID
   rfidCount = preferences.getInt("rfid_count", 0);
   if (rfidCount > 5) rfidCount = 5;
   for (int i = 0; i < rfidCount; ++i) {
@@ -131,12 +128,29 @@ void loadConfigList() {
   preferences.end();
 }
 
-// ==================== SETUP WEB SERVER ====================
+// ==================== SETUP WEB SERVER & OTA ====================
 void setupWebServer() {
   WiFi.softAP("ESP32-Keyless-Config", "12345678");
   Serial.println("\n[WEB SERVER] Mode AP Aktif!");
   Serial.println("Sambungkan HP ke WiFi: ESP32-Keyless-Config (Sandi: 12345678)");
   Serial.println("Buka browser dan ketik alamat: http://192.168.4.1");
+
+  ArduinoOTA.setHostname("ESP32-Keyless");
+
+  ArduinoOTA.onStart([]() {
+    Serial.println("[OTA] Memulai proses update program...");
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\n[OTA] Update selesai! ESP32 akan merestart.");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("[OTA] Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("[OTA Error[%u]: ", error);
+  });
+  
+  ArduinoOTA.begin();
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/html", index_html);
@@ -209,34 +223,35 @@ void setupWebServer() {
   server.begin();
 }
 
-// ==================== FUNGSI BUZZER DENGAN NADA BERBEDA ====================
+// ==================== FUNGSI BUZZER (ACTIVE HIGH) ====================
+// Nyala = HIGH, Mati = LOW
 void bunyiWakeup() {
-  digitalWrite(PIN_BUZZER, LOW);  delay(60); 
-  digitalWrite(PIN_BUZZER, HIGH);
+  digitalWrite(PIN_BUZZER, HIGH); delay(60); 
+  digitalWrite(PIN_BUZZER, LOW);
 }
 
 void bunyiWifiTerhubung() {
-  digitalWrite(PIN_BUZZER, LOW);  delay(80); 
   digitalWrite(PIN_BUZZER, HIGH); delay(80); 
   digitalWrite(PIN_BUZZER, LOW);  delay(80); 
-  digitalWrite(PIN_BUZZER, HIGH);
+  digitalWrite(PIN_BUZZER, HIGH); delay(80); 
+  digitalWrite(PIN_BUZZER, LOW);
 }
 
 void bunyiWifiTerputus() {
-  digitalWrite(PIN_BUZZER, LOW);  delay(400); 
-  digitalWrite(PIN_BUZZER, HIGH);
+  digitalWrite(PIN_BUZZER, HIGH); delay(400); 
+  digitalWrite(PIN_BUZZER, LOW);
 }
 
 void bunyiBuzzerBuka() {
-  digitalWrite(PIN_BUZZER, LOW);  delay(80); 
   digitalWrite(PIN_BUZZER, HIGH); delay(80); 
   digitalWrite(PIN_BUZZER, LOW);  delay(80); 
-  digitalWrite(PIN_BUZZER, HIGH);
+  digitalWrite(PIN_BUZZER, HIGH); delay(80); 
+  digitalWrite(PIN_BUZZER, LOW);
 }
 
 void bunyiBuzzerKunci() {
-  digitalWrite(PIN_BUZZER, LOW);  delay(250); 
-  digitalWrite(PIN_BUZZER, HIGH);
+  digitalWrite(PIN_BUZZER, HIGH); delay(250); 
+  digitalWrite(PIN_BUZZER, LOW);
 }
 
 // ==================== AKSI RELAY ====================
@@ -253,13 +268,13 @@ void runDetected() {
 void runNotDetected() {
   digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
   if (statusTerdeteksiSebelumnya) {
-    bunyiWifiTerputus(); // Suara beda saat putus / deep sleep
+    bunyiWifiTerputus(); 
     statusTerdeteksiSebelumnya = false;
-    Serial.println("STATUS: Motor Terkunci (Kontak OFF / Masuk Deep Sleep).");
+    Serial.println("STATUS: Motor Terkunci (Kontak OFF).");
   }
 }
 
-// ==================== CEK RFID (MULTI KARTU & TOGGLE) ====================
+// ==================== CEK RFID ====================
 bool cekRFID() {
   if (!mfrc522.PICC_IsNewCardPresent() || !mfrc522.PICC_ReadCardSerial()) return false;
 
@@ -271,7 +286,6 @@ bool cekRFID() {
   content.toUpperCase();
   String scannedUID = content.substring(1); 
 
-  // Mode Perekaman Kartu Baru via Web
   if (modeSettingWeb) {
     if (rfidCount < 5) {
       rfidKeyUID[rfidCount] = scannedUID;
@@ -284,7 +298,7 @@ bool cekRFID() {
       preferences.end();
       
       Serial.printf("[WEB RFID] Kartu ke-%d Berhasil Direkam! UID: %s\n", rfidCount, scannedUID.c_str());
-      digitalWrite(PIN_BUZZER, LOW); delay(200); digitalWrite(PIN_BUZZER, HIGH);
+      digitalWrite(PIN_BUZZER, HIGH); delay(200); digitalWrite(PIN_BUZZER, LOW);
     }
     modeSettingWeb = false;
     mfrc522.PICC_HaltA();
@@ -292,7 +306,6 @@ bool cekRFID() {
     return true;
   }
 
-  // Cek apakah kartu terdaftar di antara 5 kartu
   bool kartuCocok = false;
   for (int i = 0; i < rfidCount; i++) {
     if (scannedUID == rfidKeyUID[i]) {
@@ -304,7 +317,6 @@ bool cekRFID() {
   if (rfidAktif && kartuCocok) {
     Serial.printf("[RFID] Kartu Dikenali! UID: %s\n", scannedUID.c_str());
     
-    // Sistem Toggle: Tap 1x ON, Tap 1x lagi OFF
     rfidKontakState = !rfidKontakState; 
 
     if (rfidKontakState) {
@@ -318,7 +330,7 @@ bool cekRFID() {
     } else {
       digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
       bunyiBuzzerKunci();
-      berhentiTotalScan = true; // Istirahat total setelah dimatikan manual
+      berhentiTotalScan = true; 
       statusTerdeteksiSebelumnya = false;
       Serial.println("[RFID ACTION] Kontak dimatikan via Kartu.");
     }
@@ -328,8 +340,9 @@ bool cekRFID() {
     return true;
   } else {
     Serial.printf("[RFID] Kartu Tidak Dikenali. UID: %s\n", scannedUID.c_str());
-    digitalWrite(PIN_BUZZER, LOW); delay(50); digitalWrite(PIN_BUZZER, HIGH); delay(50);
-    digitalWrite(PIN_BUZZER, LOW); delay(50); digitalWrite(PIN_BUZZER, HIGH);
+    // Bunyi salah (Active HIGH: HIGH lalu LOW)
+    digitalWrite(PIN_BUZZER, HIGH); delay(50); digitalWrite(PIN_BUZZER, LOW); delay(50);
+    digitalWrite(PIN_BUZZER, HIGH); delay(50); digitalWrite(PIN_BUZZER, LOW);
   }
 
   mfrc522.PICC_HaltA();
@@ -392,7 +405,7 @@ void setup() {
   digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
 
   pinMode(PIN_BUZZER, OUTPUT);
-  digitalWrite(PIN_BUZZER, HIGH);        
+  digitalWrite(PIN_BUZZER, LOW);         // Kondisi Mati di awal untuk Active HIGH
 
   pinMode(PIN_SIMULASI_GETAR, INPUT_PULLUP); 
 
@@ -401,6 +414,8 @@ void setup() {
 }
 
 void loop() {
+  ArduinoOTA.handle();
+
   if (cekRFID()) {
     delay(500);
   }
@@ -408,7 +423,7 @@ void loop() {
   if (berhentiTotalScan) {
     if (digitalRead(PIN_SIMULASI_GETAR) == LOW) { 
       Serial.println("\n[WAKE UP] Guncangan terdeteksi! ESP32 bangun...");
-      bunyiWakeup(); // Suara khusus saat bangun
+      bunyiWakeup(); 
       berhentiTotalScan = false;
       sedangMencari = false;
       hitungGagalScan = 0;
