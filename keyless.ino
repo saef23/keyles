@@ -32,9 +32,12 @@ Preferences preferences;
 unsigned long waktuMulaiHilang = 0;
 bool sedangMencari = false;
 bool berhentiTotalScan = false;
-int hitungGagalScan = 0;             
-const int BATAS_TOLERANSI_GAGAL = 3; 
 bool statusTerdeteksiSebelumnya = false;
+
+// Variabel Anti-Spam / Filter Sensor Getar
+unsigned long waktuGetarMulai = 0;
+bool sedangMendeteksiGetar = false;
+const unsigned long DURASI_STABIL_GETAR = 150; // Sensor harus stabil HIGH selama 150ms (mencegah getaran angin/palsu)
 
 // Mode Web Config / AP Mode
 bool modeSettingWeb = false;
@@ -256,7 +259,6 @@ void bunyiBuzzerKunci() {
 // ==================== AKSI RELAY (ACTIVE HIGH) ====================
 void runDetected() {
   digitalWrite(PIN_RELAY_KEYLESS, HIGH);  
-  hitungGagalScan = 0;                   
   if (!statusTerdeteksiSebelumnya) {
     bunyiWifiTerhubung();
     statusTerdeteksiSebelumnya = true;
@@ -323,7 +325,6 @@ bool cekRFID() {
       bunyiBuzzerBuka();
       berhentiTotalScan = false; 
       waktuMulaiHilang = millis();
-      hitungGagalScan = 0;
       statusTerdeteksiSebelumnya = true;
       Serial.println("[RFID ACTION] Kontak dinyalakan via Kartu.");
     } else {
@@ -348,7 +349,7 @@ bool cekRFID() {
   return false;
 }
 
-// ==================== DETEKSI WIFI ====================
+// ==================== DETEKSI WIFI (DENGAN TIMEOUT 10 DETIK) ====================
 void detectwifi() {
   if (berhentiTotalScan) return; 
 
@@ -360,37 +361,36 @@ void detectwifi() {
       if (WiFi.SSID(i) == SSIDkey[j]) {
         if (WiFi.RSSI(i) >= RSSItresh[j]) {
           found = true;
-          WiFi.scanDelete();
-          runDetected(); 
-          waktuMulaiHilang = 0;
-          sedangMencari = false;
-          hitungGagalScan = 0;
-          delay(500);
           break;
         }
       }
     }
     if (found) break;
   }
+  
+  WiFi.scanDelete();
 
-  if (!found) {
-    WiFi.scanDelete();
-    hitungGagalScan++; 
-
-    if (hitungGagalScan >= BATAS_TOLERANSI_GAGAL) {
-      runNotDetected(); 
-      if (!sedangMencari) {
-        waktuMulaiHilang = millis();
-        sedangMencari = true;
-      }
-      // DIUBAH MENJADI 10 DETIK (10000 milidetik)
-      if (millis() - waktuMulaiHilang >= 10000) {
-        Serial.println("STATUS: Tidak ada sinyal selama 10 detik. ESP32 masuk mode standby.");
-        berhentiTotalScan = true; 
-      }
+  if (found) {
+    runDetected(); 
+    waktuMulaiHilang = 0;
+    sedangMencari = false;
+  } else {
+    runNotDetected(); 
+    
+    if (!sedangMencari) {
+      waktuMulaiHilang = millis();
+      sedangMencari = true;
     }
-    delay(1000);
+    
+    // Masuk mode standby jika dalam 10 detik HP tidak ditemukan
+    if (millis() - waktuMulaiHilang >= 10000) {
+      Serial.println("STATUS: Tidak ada sinyal selama 10 detik. ESP32 masuk mode standby.");
+      berhentiTotalScan = true; 
+      sedangMencari = false;
+    }
   }
+  
+  delay(1000);
 }
 
 void setup() {
@@ -420,19 +420,32 @@ void loop() {
   }
 
   if (berhentiTotalScan) {
-    if (digitalRead(PIN_SIMULASI_GETAR) == HIGH) { 
-      Serial.println("\n[WAKE UP] Guncangan terdeteksi! ESP32 bangun...");
-      bunyiWakeup(); 
-      berhentiTotalScan = false;
-      sedangMencari = false;
-      hitungGagalScan = 0;
-      statusTerdeteksiSebelumnya = false; 
-      waktuMulaiHilang = millis();
-      delay(1000); 
+    // FILTER SENSOR GETAR (ANTI GETARAN PALSU)
+    // Sensor harus bernilai HIGH secara stabil selama 150 milidetik (DURASI_STABIL_GETAR)
+    if (digitalRead(PIN_SIMULASI_GETAR) == HIGH) {
+      if (!sedangMendeteksiGetar) {
+        waktuGetarMulai = millis();
+        sedangMendeteksiGetar = true;
+      } else {
+        // Jika sudah bertahan HIGH selama durasi yang ditentukan, baru anggap getaran valid!
+        if (millis() - waktuGetarMulai >= DURASI_STABIL_GETAR) {
+          Serial.println("\n[WAKE UP] Guncangan valid terdeteksi! ESP32 bangun...");
+          bunyiWakeup(); 
+          berhentiTotalScan = false;
+          sedangMencari = false;
+          statusTerdeteksiSebelumnya = false; 
+          waktuMulaiHilang = millis();
+          sedangMendeteksiGetar = false;
+          delay(1000); 
+        }
+      }
     } else {
-      delay(100); 
-      return; 
+      // Jika mendadak LOW sebelum waktunya, reset hitungan (artinya cuma getaran angin/palsu)
+      sedangMendeteksiGetar = false;
     }
+
+    delay(50); // Cek getaran lebih cepat dan responsif
+    return; 
   }
 
   if (keynumber > 0 || rfidAktif) {
