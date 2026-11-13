@@ -7,8 +7,8 @@
 #include <ArduinoOTA.h>
 
 // ==================== KONFIGURASI PIN ====================
-const int PIN_RELAY_KEYLESS  = 2;   // Pin Relay Utama / Kontak (GPIO 2) - Diubah ke ACTIVE HIGH
-const int PIN_SIMULASI_GETAR = 4;   // Pin Sensor Getar / Tombol Bangun (GPIO 4)
+const int PIN_RELAY_KEYLESS  = 2;   // Pin Relay Utama / Kontak (GPIO 2) - ACTIVE HIGH
+const int PIN_SIMULASI_GETAR = 4;   // Pin Sensor Getar / Tombol Bangun (GPIO 4) - Sinyal HIGH saat bergetar
 const int PIN_BUZZER         = 25;  // Pin Buzzer Indikator (GPIO 25) - ACTIVE HIGH
 
 // Konfigurasi Pin RFID RC522 (SPI Default ESP32)
@@ -254,7 +254,6 @@ void bunyiBuzzerKunci() {
 }
 
 // ==================== AKSI RELAY (ACTIVE HIGH) ====================
-// ON = HIGH, OFF = LOW
 void runDetected() {
   digitalWrite(PIN_RELAY_KEYLESS, HIGH);  
   hitungGagalScan = 0;                   
@@ -320,7 +319,7 @@ bool cekRFID() {
     rfidKontakState = !rfidKontakState; 
 
     if (rfidKontakState) {
-      digitalWrite(PIN_RELAY_KEYLESS, HIGH); // ON (Active High)
+      digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
       bunyiBuzzerBuka();
       berhentiTotalScan = false; 
       waktuMulaiHilang = millis();
@@ -328,7 +327,7 @@ bool cekRFID() {
       statusTerdeteksiSebelumnya = true;
       Serial.println("[RFID ACTION] Kontak dinyalakan via Kartu.");
     } else {
-      digitalWrite(PIN_RELAY_KEYLESS, LOW);  // OFF (Active High)
+      digitalWrite(PIN_RELAY_KEYLESS, LOW);  
       bunyiBuzzerKunci();
       berhentiTotalScan = true; 
       statusTerdeteksiSebelumnya = false;
@@ -401,12 +400,12 @@ void setup() {
   mfrc522.PCD_Init();
 
   pinMode(PIN_RELAY_KEYLESS, OUTPUT);
-  digitalWrite(PIN_RELAY_KEYLESS, LOW);  // Kondisi Mati awal untuk Active HIGH
+  digitalWrite(PIN_RELAY_KEYLESS, LOW);  
 
   pinMode(PIN_BUZZER, OUTPUT);
-  digitalWrite(PIN_BUZZER, LOW);         // Kondisi Mati awal untuk Active HIGH
+  digitalWrite(PIN_BUZZER, LOW);         
 
-  pinMode(PIN_SIMULASI_GETAR, INPUT_PULLUP); 
+  pinMode(PIN_SIMULASI_GETAR, INPUT); // Menggunakan INPUT biasa untuk Active HIGH (sesuai modul getar Anda)
 
   loadConfigList();
   setupWebServer();
@@ -420,7 +419,8 @@ void loop() {
   }
 
   if (berhentiTotalScan) {
-    if (digitalRead(PIN_SIMULASI_GETAR) == LOW) { 
+    // Sensor Getar Active HIGH (Bergetar = HIGH)
+    if (digitalRead(PIN_SIMULASI_GETAR) == HIGH) { 
       Serial.println("\n[WAKE UP] Guncangan terdeteksi! ESP32 bangun...");
       bunyiWakeup(); 
       berhentiTotalScan = false;
