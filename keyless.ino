@@ -7,9 +7,9 @@
 #include <ArduinoOTA.h>
 
 // ==================== KONFIGURASI PIN ====================
-const int PIN_RELAY_KEYLESS  = 2;   // Pin Relay Utama / Kontak (GPIO 2) - Tetap Active LOW
+const int PIN_RELAY_KEYLESS  = 2;   // Pin Relay Utama / Kontak (GPIO 2) - Diubah ke ACTIVE HIGH
 const int PIN_SIMULASI_GETAR = 4;   // Pin Sensor Getar / Tombol Bangun (GPIO 4)
-const int PIN_BUZZER         = 25;  // Pin Buzzer Indikator (GPIO 25) - Diubah ke ACTIVE HIGH
+const int PIN_BUZZER         = 25;  // Pin Buzzer Indikator (GPIO 25) - ACTIVE HIGH
 
 // Konfigurasi Pin RFID RC522 (SPI Default ESP32)
 const int RST_PIN = 22;             
@@ -224,7 +224,6 @@ void setupWebServer() {
 }
 
 // ==================== FUNGSI BUZZER (ACTIVE HIGH) ====================
-// Nyala = HIGH, Mati = LOW
 void bunyiWakeup() {
   digitalWrite(PIN_BUZZER, HIGH); delay(60); 
   digitalWrite(PIN_BUZZER, LOW);
@@ -254,9 +253,10 @@ void bunyiBuzzerKunci() {
   digitalWrite(PIN_BUZZER, LOW);
 }
 
-// ==================== AKSI RELAY ====================
+// ==================== AKSI RELAY (ACTIVE HIGH) ====================
+// ON = HIGH, OFF = LOW
 void runDetected() {
-  digitalWrite(PIN_RELAY_KEYLESS, LOW);  
+  digitalWrite(PIN_RELAY_KEYLESS, HIGH);  
   hitungGagalScan = 0;                   
   if (!statusTerdeteksiSebelumnya) {
     bunyiWifiTerhubung();
@@ -266,7 +266,7 @@ void runDetected() {
 }
 
 void runNotDetected() {
-  digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
+  digitalWrite(PIN_RELAY_KEYLESS, LOW); 
   if (statusTerdeteksiSebelumnya) {
     bunyiWifiTerputus(); 
     statusTerdeteksiSebelumnya = false;
@@ -320,7 +320,7 @@ bool cekRFID() {
     rfidKontakState = !rfidKontakState; 
 
     if (rfidKontakState) {
-      digitalWrite(PIN_RELAY_KEYLESS, LOW);  
+      digitalWrite(PIN_RELAY_KEYLESS, HIGH); // ON (Active High)
       bunyiBuzzerBuka();
       berhentiTotalScan = false; 
       waktuMulaiHilang = millis();
@@ -328,7 +328,7 @@ bool cekRFID() {
       statusTerdeteksiSebelumnya = true;
       Serial.println("[RFID ACTION] Kontak dinyalakan via Kartu.");
     } else {
-      digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
+      digitalWrite(PIN_RELAY_KEYLESS, LOW);  // OFF (Active High)
       bunyiBuzzerKunci();
       berhentiTotalScan = true; 
       statusTerdeteksiSebelumnya = false;
@@ -340,7 +340,6 @@ bool cekRFID() {
     return true;
   } else {
     Serial.printf("[RFID] Kartu Tidak Dikenali. UID: %s\n", scannedUID.c_str());
-    // Bunyi salah (Active HIGH: HIGH lalu LOW)
     digitalWrite(PIN_BUZZER, HIGH); delay(50); digitalWrite(PIN_BUZZER, LOW); delay(50);
     digitalWrite(PIN_BUZZER, HIGH); delay(50); digitalWrite(PIN_BUZZER, LOW);
   }
@@ -402,10 +401,10 @@ void setup() {
   mfrc522.PCD_Init();
 
   pinMode(PIN_RELAY_KEYLESS, OUTPUT);
-  digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
+  digitalWrite(PIN_RELAY_KEYLESS, LOW);  // Kondisi Mati awal untuk Active HIGH
 
   pinMode(PIN_BUZZER, OUTPUT);
-  digitalWrite(PIN_BUZZER, LOW);         // Kondisi Mati di awal untuk Active HIGH
+  digitalWrite(PIN_BUZZER, LOW);         // Kondisi Mati awal untuk Active HIGH
 
   pinMode(PIN_SIMULASI_GETAR, INPUT_PULLUP); 
 
