@@ -92,7 +92,6 @@ void aktifkanWiFiAP() {
     Serial.println("\n[AP ON-DEMAND] Wi-Fi AP Aktif! SSID: ESP32-Keyless-Config (Sandi: 12345678)");
     Serial.println("Akses via browser: http://192.168.4.1");
     
-    // Bunyi konfirmasi AP aktif
     digitalWrite(PIN_BUZZER, HIGH); delay(100);
     digitalWrite(PIN_BUZZER, LOW);  delay(100);
     digitalWrite(PIN_BUZZER, HIGH); delay(100);
@@ -109,7 +108,7 @@ void matikanWiFiAP() {
   }
 }
 
-// ==================== MEMUAT DATA DARI MEMORI ====================
+// ==================== MEMUAT & MENYIMPAN DATA DARI MEMORI ====================
 void loadConfigList() {
   preferences.begin("wifi_keys", true);
   
@@ -137,11 +136,11 @@ void simpanJamOli() {
   preferences.begin("wifi_keys", false);
   preferences.putULong("oli_menit", totalJamKerjaMenit);
   preferences.end();
+  Serial.println("[TELEMETRI] Jam kerja oli berhasil disimpan ke Flash Memory.");
 }
 
 // ==================== SETUP WEB SERVER ====================
 void setupWebServer() {
-  // Mulai dalam mode STA (AP mati secara default saat booting)
   WiFi.mode(WIFI_STA);
   wifiApAktif = false;
 
@@ -338,6 +337,7 @@ void runDetected() {
     
     Serial.println("STATUS: Motor Terbuka (Kontak ON).");
   } else {
+    // Perhitungan waktu di RAM saja (tidak menulis ke Flash setiap 1 menit agar awet)
     if (millis() - waktuMulaiMesinNyala >= 60000) {
       totalJamKerjaMenit++;
       waktuMulaiMesinNyala = millis();
@@ -351,8 +351,8 @@ void runNotDetected() {
   if (statusTerdeteksiSebelumnya) {
     bunyiWifiTerputus(); 
     statusTerdeteksiSebelumnya = false;
-    simpanJamOli(); // Disimpan saat motor dikunci/mati agar flash awet
-    matikanWiFiAP(); // Otomatis matikan AP jika motor mati
+    simpanJamOli(); // <-- HANYA DISIMPAN DI SINI (Saat motor dimatikan/terkunci)
+    matikanWiFiAP(); 
     Serial.println("STATUS: Motor Terkunci (Kontak OFF).");
   }
 }
@@ -399,7 +399,6 @@ bool cekRFID() {
   if (rfidAktif && kartuCocok) {
     Serial.printf("[RFID] Kartu Dikenali! UID: %s\n", scannedUID.c_str());
     
-    // Fitur Tambahan: Deteksi Multi-Tap RFID (3x tap dalam 2.5 detik saat motor ON -> Buka Setting AP)
     if (statusTerdeteksiSebelumnya) {
       unsigned long sekarang = millis();
       if (sekarang - waktuRfidTapPertama > 2500) {
@@ -440,6 +439,7 @@ bool cekRFID() {
       sedangMenungguStandbyRFID = true;
       waktuMulaiStandbyRFID = millis();
       statusTerdeteksiSebelumnya = false;
+      simpanJamOli(); // <-- Simpan jam oli juga saat dimatikan via RFID
       matikanWiFiAP();
       
       Serial.println("[RFID ACTION] Kontak dimatikan via Kartu. Menunggu 10 detik sebelum standby...");
@@ -546,7 +546,6 @@ void setup() {
 }
 
 void loop() {
-  // Cek timeout otomatis untuk Wi-Fi AP jika sedang aktif
   if (wifiApAktif && (millis() - waktuMulaiAP >= TIMEOUT_AP_AUTO_OFF)) {
     Serial.println("[AP TIMEOUT] Wi-Fi AP dimatikan otomatis setelah 2 menit tidak diakses.");
     matikanWiFiAP();
@@ -568,7 +567,7 @@ void loop() {
       mfrc522.PCD_SoftPowerUp();
       delay(50);
       mfrc522.PCD_Init(); 
-      WiFi.mode(WIFI_STA); // Normal STA mode saat bangun
+      WiFi.mode(WIFI_STA); 
       Serial.println("[POWER] Modul RFID & WiFi diaktifkan kembali.");
 
       delay(1000);
@@ -603,7 +602,7 @@ void loop() {
           mfrc522.PCD_SoftPowerUp();
           delay(50);
           mfrc522.PCD_Init(); 
-          WiFi.mode(WIFI_STA); // Normal STA mode saat bangun
+          WiFi.mode(WIFI_STA); 
           Serial.println("[POWER] Modul RFID & WiFi diaktifkan kembali.");
 
           delay(1000); 
@@ -617,7 +616,6 @@ void loop() {
     return; 
   }
 
-  // Cek tombol fisik (PIN_BUTTON_WAKEUP) saat motor menyala (Multi-tap 3x untuk buka AP setting)
   bool currentButtonState = digitalRead(PIN_BUTTON_WAKEUP);
   if (currentButtonState == LOW && lastButtonState == HIGH && (millis() - lastButtonDebounce > 300)) {
     lastButtonDebounce = millis();
@@ -631,39 +629,4 @@ void loop() {
       }
       buttonTapCount++;
 
-      if (buttonTapCount >= 3) {
-        buttonTapCount = 0;
-        aktifkanWiFiAP();
-      }
-    }
-  }
-  lastButtonState = currentButtonState;
-
-  if (cekRFID()) {
-    delay(1500); 
-  }
-
-  if (sedangMenungguStandbyRFID) {
-    if (millis() - waktuMulaiStandbyRFID >= 10000) {
-      Serial.println("STATUS: Jeda 10 detik selesai. ESP32 masuk mode standby.");
-      bunyiStandby(); 
-      
-      sedangMenungguStandbyRFID = false;
-      berhentiTotalScan = true; 
-      siapBangunGetar = false;
-      sedangMendeteksiGetar = false;
-      hitungGagalScanWiFi = 0;
-
-      matikanWiFiAP();
-      WiFi.mode(WIFI_OFF);
-      mfrc522.PCD_SoftPowerDown();
-      Serial.println("[POWER] WiFi & Modul RFID dimatikan total untuk hemat daya.");
-    }
-    delay(50);
-    return;
-  }
-
-  if (keynumber > 0 || rfidAktif) {
-    detectwifi();
-  }
-}
+      if (butto
