@@ -135,75 +135,155 @@ const char index_html[] PROGMEM = R"rawliteral(
             font-size: 0.8rem;
             color: #fff;
         }
+        /* Style Halaman Login */
+        #login-screen {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            height: 80vh;
+        }
+        #dashboard-screen {
+            display: none;
+        }
+        .error-msg {
+            color: var(--danger-color);
+            font-size: 0.85rem;
+            text-align: center;
+            margin-top: 10px;
+            display: none;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <header>
-            <h2>Mio S Keyless Panel</h2>
-            <p>ESP32 Security & Telemetry System</p>
-        </header>
-
-        <!-- CARD STATUS KELISTRIKAN -->
-        <div class="card">
-            <h3>Status Kendaraan</h3>
-            <div class="stat-grid">
-                <div class="stat-box">
-                    <span>Tegangan Aki</span>
-                    <strong id="val-volt">-- V</strong>
-                </div>
-                <div class="stat-box">
-                    <span>Jam Kerja Mesin</span>
-                    <strong id="val-oli">-- Jam</strong>
-                </div>
+        <!-- TAMPILAN LOGIN -->
+        <div id="login-screen">
+            <header>
+                <h2>Mio S Keyless</h2>
+                <p>Silakan Login ke Panel Kontrol</p>
+            </header>
+            <div class="card">
+                <label>Username:</label>
+                <input type="text" id="login-user" placeholder="admin">
+                <label>Password:</label>
+                <input type="password" id="login-pass" placeholder="1234">
+                <button type="button" onclick="handleLogin()">Masuk Dashboard</button>
+                <p id="login-error" class="error-msg">Username atau Password salah!</p>
             </div>
-            <p id="oli-warning" style="text-align: center; margin-top: 12px; font-weight: bold; font-size: 0.85rem;"></p>
         </div>
 
-        <!-- CARD TAMBAH WIFI / HP -->
-        <div class="card">
-            <h3>Daftar Perangkat Wi-Fi (Max 5)</h3>
-            <ul id="wifi-list">Memuat data...</ul>
-            <form action="/savewifi" method="POST">
-                <label>Nama WiFi (SSID HP):</label>
-                <input type="text" name="ssid" required placeholder="Contoh: Hotspot HP Saya">
-                <label>MAC Address (BSSID):</label>
-                <input type="text" name="bssid" required placeholder="Contoh: AA:BB:CC:DD:EE:FF">
-                <label>Minimal RSSI (Kekuatan Sinyal):</label>
-                <select name="rssi">
-                    <option value="-60">Dekat Sekali (-60 dBm)</option>
-                    <option value="-70" selected>Normal / Dalam Saku (-70 dBm)</option>
-                    <option value="-80">Agak Jauh (-80 dBm)</option>
-                </select>
-                <button type="submit">Simpan Wi-Fi Baru</button>
-            </form>
-        </div>
+        <!-- TAMPILAN DASHBOARD UTAMA -->
+        <div id="dashboard-screen">
+            <header>
+                <h2>Mio S Keyless Panel</h2>
+                <p>ESP32 Security & Telemetry System</p>
+            </header>
 
-        <!-- CARD RFID -->
-        <div class="card">
-            <h3>Manajemen Kartu RFID</h3>
-            <ul id="rfid-list">Memuat data...</ul>
-            <a href="/scanrfid"><button class="btn-success" type="button">Rekam Kartu RFID Baru</button></a>
-        </div>
+            <div class="card">
+                <h3>Status Kendaraan</h3>
+                <div class="stat-grid">
+                    <div class="stat-box">
+                        <span>Tegangan Aki</span>
+                        <strong id="val-volt">-- V</strong>
+                    </div>
+                    <div class="stat-box">
+                        <span>Jam Kerja Mesin</span>
+                        <strong id="val-oli">-- Jam</strong>
+                    </div>
+                </div>
+                <p id="oli-warning" style="text-align: center; margin-top: 12px; font-weight: bold; font-size: 0.85rem;"></p>
+            </div>
 
-        <!-- CARD MAINTENANCE & RESET -->
-        <div class="card">
-            <h3>Pemeliharaan & Sistem</h3>
-            <a href="/resetoli"><button class="btn-warning" type="button">Reset Timer Oli Mesin</button></a>
-            <a href="/resetwifi"><button class="btn-danger" type="button" onclick="return confirm('Hapus seluruh konfigurasi?')">Factory Reset (Hapus Semua)</button></a>
-            <a href="/restart"><button type="button" style="background:#475569; color:#fff;">Restart ESP32</button></a>
+            <div class="card">
+                <h3>Daftar Perangkat Wi-Fi (Max 5)</h3>
+                <ul id="wifi-list">Memuat data...</ul>
+                <form action="/savewifi" method="POST">
+                    <label>Nama WiFi (SSID HP):</label>
+                    <input type="text" name="ssid" required placeholder="Contoh: Hotspot HP Saya">
+                    <label>MAC Address (BSSID):</label>
+                    <input type="text" name="bssid" required placeholder="Contoh: AA:BB:CC:DD:EE:FF">
+                    <label>Minimal RSSI:</label>
+                    <select name="rssi">
+                        <option value="-60">Dekat Sekali (-60 dBm)</option>
+                        <option value="-70" selected>Normal / Dalam Saku (-70 dBm)</option>
+                        <option value="-80">Agak Jauh (-80 dBm)</option>
+                    </select>
+                    <button type="submit">Simpan Wi-Fi Baru</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h3>Manajemen Kartu RFID</h3>
+                <ul id="rfid-list">Memuat data...</ul>
+                <a href="/scanrfid"><button class="btn-success" type="button">Rekam Kartu RFID Baru</button></a>
+            </div>
+
+            <div class="card">
+                <h3>Pemeliharaan & Sistem</h3>
+                <a href="/resetoli"><button class="btn-warning" type="button">Reset Timer Oli Mesin</button></a>
+                <a href="/resetwifi"><button class="btn-danger" type="button" onclick="return confirm('Hapus seluruh konfigurasi?')">Factory Reset</button></a>
+                <a href="/restart"><button type="button" style="background:#475569; color:#fff;">Restart ESP32</button></a>
+                <button type="button" class="btn-danger" onclick="handleLogout()" style="margin-top: 25px;">Keluar (Logout)</button>
+            </div>
         </div>
     </div>
 
     <script>
+        let refreshInterval;
+
+        // Cek sesi login saat halaman dibuka
+        window.onload = function() {
+            if (sessionStorage.getItem("isLoggedIn") === "true") {
+                showDashboard();
+            }
+        };
+
+        function handleLogin() {
+            let u = document.getElementById("login-user").value;
+            let p = document.getElementById("login-pass").value;
+
+            let formData = new URLSearchParams();
+            formData.append("user", u);
+            formData.append("pass", p);
+
+            fetch('/login', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (response.status === 200) {
+                    sessionStorage.setItem("isLoggedIn", "true");
+                    showDashboard();
+                } else {
+                    document.getElementById("login-error").style.display = "block";
+                }
+            })
+            .catch(err => console.error("Login error:", err));
+        }
+
+        function handleLogout() {
+            sessionStorage.removeItem("isLoggedIn");
+            clearInterval(refreshInterval);
+            document.getElementById("dashboard-screen").style.display = "none";
+            document.getElementById("login-screen").style.display = "flex";
+            document.getElementById("login-user").value = "";
+            document.getElementById("login-pass").value = "";
+            document.getElementById("login-error").style.display = "none";
+        }
+
+        function showDashboard() {
+            document.getElementById("login-screen").style.display = "none";
+            document.getElementById("dashboard-screen").style.display = "block";
+            fetchData();
+            refreshInterval = setInterval(fetchData, 3000);
+        }
+
         function fetchData() {
             fetch('/getdata')
                 .then(response => response.json())
                 .then(data => {
-                    // Update Tegangan Aki
                     document.getElementById('val-volt').innerText = data.tegangan + ' V';
                     
-                    // Update Jam Oli (Konversi menit ke Jam & Menit)
                     let totalMenit = data.total_menit;
                     let jam = Math.floor(totalMenit / 60);
                     let menit = totalMenit % 60;
@@ -216,7 +296,6 @@ const char index_html[] PROGMEM = R"rawliteral(
                         warningEl.innerHTML = "<span style='color: #22c55e;'>✔ Kondisi Oli Normal</span>";
                     }
 
-                    // Update List WiFi
                     let wifiHtml = '';
                     if(data.wifis.length === 0) {
                         wifiHtml = '<li>Belum ada WiFi terdaftar.</li>';
@@ -227,7 +306,6 @@ const char index_html[] PROGMEM = R"rawliteral(
                     }
                     document.getElementById('wifi-list').innerHTML = wifiHtml;
 
-                    // Update List RFID
                     let rfidHtml = '';
                     if(data.rfids.length === 0) {
                         rfidHtml = '<li>Belum ada kartu RFID terdaftar.</li>';
@@ -240,10 +318,6 @@ const char index_html[] PROGMEM = R"rawliteral(
                 })
                 .catch(err => console.error('Gagal mengambil data:', err));
         }
-
-        // Ambil data pertama kali dan refresh tiap 3 detik
-        fetchData();
-        setInterval(fetchData, 3000);
     </script>
 </body>
 </html>
