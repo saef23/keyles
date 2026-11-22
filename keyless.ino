@@ -8,26 +8,26 @@
 #include "index.h" // Memuat file HTML eksternal
 
 // ==================== KONFIGURASI PIN ====================
-const int PIN_RELAY_KEYLESS  = 2;   
-const int PIN_SIMULASI_GETAR = 4;   
-const int PIN_BUTTON_WAKEUP  = 13;  
-const int PIN_BUZZER         = 25;  
-const int PIN_VOLT_SENSOR    = 34;  
-const int PIN_LED_STATUS     = 14;  
+const int PIN_RELAY_KEYLESS  = 2;
+const int PIN_SIMULASI_GETAR = 4;
+const int PIN_BUTTON_WAKEUP  = 13;
+const int PIN_BUZZER         = 25;
+const int PIN_VOLT_SENSOR    = 34;
+const int PIN_LED_STATUS     = 14;
 
-const int RST_PIN = 22;             
-const int SS_PIN  = 5;              
-MFRC522 mfrc522(SS_PIN, RST_PIN);   
+const int RST_PIN = 22;
+const int SS_PIN  = 5;
+MFRC522 mfrc522(SS_PIN, RST_PIN);
 
 String SSIDkey[5];
-String BSSIDkey[5]; 
+String BSSIDkey[5]; // Disimpan bila ada, namun tidak membatasi pencocokan Wi-Fi
 int RSSItresh[5];
 int keynumber = 0;
 
-String rfidKeyUID[5];  
-int rfidCount = 0;     
+String rfidKeyUID[5];
+int rfidCount = 0;
 bool rfidAktif = false;
-bool rfidKontakState = false; 
+bool rfidKontakState = false;
 
 Preferences preferences;
 
@@ -39,34 +39,46 @@ bool statusTerdeteksiSebelumnya = false;
 unsigned long waktuMulaiStandbyRFID = 0;
 bool sedangMenungguStandbyRFID = false;
 
-// Mode wake up sementara setelah terputus Wi-Fi / dimatikan RFID sebelum ke standby
+// Mode wake up sementara setelah bangun / terputus Wi-Fi / dimatikan RFID sebelum ke standby
 unsigned long waktuMasukModeWakeup = 0;
 bool sedangDiModeWakeup = false;
-const unsigned long TIMEOUT_WAKEUP_KE_STANDBY = 30000; // 30 detik sebelum ke standby
+const unsigned long TIMEOUT_WAKEUP_KE_STANDBY = 30000; // 30 detik batas pengaman
 
-int hitungGagalScanWiFi = 0;             
-const int BATAS_TOLERANSI_WIFI = 3;    
+int hitungScanWakeup = 0;
+const int MAKS_SCAN_WAKEUP = 3; // Maksimal 3 kali scan Wi-Fi saat wake up
+
+int hitungGagalScanWiFi = 0;
+const int BATAS_TOLERANSI_WIFI = 3;
 
 unsigned long waktuGetarMulai = 0;
 bool sedangMendeteksiGetar = false;
-bool siapBangunGetar = false;          
+bool siapBangunGetar = false;
 
 // Sensitivitas tersimpan di Preferences (dapat diubah lewat Web Config)
 unsigned long durasiStabilGetarMs = 250; // ms (makin kecil makin responsif/sensitif)
 unsigned long debounceTombolMs    = 60;  // ms
 int jumlahTapConfigAP             = 3;   // 2 - 5 kali tekan
 
-unsigned long totalJamKerjaMenit = 0;  
+// ==================== SETELAN LED & BUZZER PER PROSES ====================
+bool ledWakeup  = true,  buzWakeup  = true;
+bool ledStandby = true,  buzStandby = true;
+bool ledWifi    = true,  buzWifi    = true;
+bool ledRfid    = true,  buzRfid    = true;
+bool ledAp      = true,  buzAp      = true;
+bool ledOli     = true,  buzOli     = true;
+
+unsigned long totalJamKerjaMenit = 0;
 unsigned long waktuMulaiMesinNyala = 0;
-const unsigned long INTERVAL_GANTI_OLI_MENIT = 12000; 
+const unsigned long INTERVAL_GANTI_OLI_MENIT = 12000;
 bool peringatanOliSudahBunyi = false;
 
-float teganganAki = 0.0; 
+float teganganAki = 0.0;
 
 bool modeSettingWeb = false;
 bool wifiApAktif = false;
+bool sedangOTA = false;
 unsigned long waktuMulaiAP = 0;
-const unsigned long TIMEOUT_AP_AUTO_OFF = 120000; 
+const unsigned long TIMEOUT_AP_AUTO_OFF = 120000;
 
 int rfidTapCount = 0;
 unsigned long waktuRfidTapPertama = 0;
@@ -86,13 +98,100 @@ bool sedangMenekanWakeup = false;
 unsigned long lastLedToggle = 0;
 bool ledState = LOW;
 
+// ==================== LIVE SERIAL / EVENT LOG BUFFER ====================
+const int MAX_LOG_LINES = 50;
+String logBuffer[MAX_LOG_LINES];
+int logHeadIndex = 0;
+uint32_t totalLogCount = 0;
+
 AsyncWebServer server(80);
+
+// Deklarasi fungsi sebelum dipakai
+void masukModeStandby();
+void masukModeWakeup();
+void keluarDariStandby();
+void catetLog(const String &msg);
+void updateIndikatorLED();
+
+String formatWaktuSingkat() {
+  unsigned long detik = millis() / 1000;
+  unsigned long jam = (detik / 3600) % 100;
+  unsigned long menit = (detik / 60) % 60;
+  unsigned long dtk = detik % 60;
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%02lu:%02lu:%02lu", jam, menit, dtk);
+  return String(buf);
+}
+
+void catetLog(const String &msg) {
+  String line = "[" + formatWaktuSingkat() + "] " + msg;
+  Serial.println(line);
+  logBuffer[logHeadIndex] = line;
+  logHeadIndex = (logHeadIndex + 1) % MAX_LOG_LINES;
+  totalLogCount++;
+}
+
+String escapeJsonString(const String &s) {
+  String out = "";
+  out.reserve(s.length() + 8);
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '\\') out += "\\\\";
+    else if (c == '\"') out += "\\\"";
+    else if (c == '\n') out += "\\n";
+    else if (c == '\r') out += "\\r";
+    else out += c;
+  }
+  return out;
+}
+
+bool parseBoolParam(AsyncWebServerRequest *request, const char *name, bool currentVal) {
+  if (!request->hasParam(name, true)) return currentVal;
+  String v = request->getParam(name, true)->value();
+  v.toLowerCase();
+  if (v == "1" || v == "true" || v == "on") return true;
+  if (v == "0" || v == "false" || v == "off") return false;
+  return currentVal;
+}
+
+// ==================== HELPER NOTIFIKASI PER PROSES ====================
+void bunyiPulsa(bool aktif, unsigned long durasiMs) {
+  if (!aktif) return;
+  digitalWrite(PIN_BUZZER, HIGH);
+  delay(durasiMs);
+  digitalWrite(PIN_BUZZER, LOW);
+}
+
+void bunyiPola(bool aktif, int jumlah, unsigned long onMs, unsigned long offMs) {
+  if (!aktif) return;
+  for (int i = 0; i < jumlah; i++) {
+    digitalWrite(PIN_BUZZER, HIGH);
+    delay(onMs);
+    digitalWrite(PIN_BUZZER, LOW);
+    if (i < jumlah - 1) delay(offMs);
+  }
+}
+
+void kedipEventLED(bool aktif, int jumlah, unsigned long onMs, unsigned long offMs) {
+  if (!aktif) return;
+  for (int i = 0; i < jumlah; i++) {
+    digitalWrite(PIN_LED_STATUS, HIGH);
+    delay(onMs);
+    digitalWrite(PIN_LED_STATUS, LOW);
+    if (i < jumlah - 1) delay(offMs);
+  }
+}
 
 void updateIndikatorLED() {
   unsigned long sekarang = millis();
 
-  // 4. Mode AP aktif -> kedip cepat (120 ms)
+  // 4. Mode AP aktif -> kedip cepat (120 ms) jika ledAp aktif
   if (wifiApAktif) {
+    if (!ledAp) {
+      ledState = LOW;
+      digitalWrite(PIN_LED_STATUS, LOW);
+      return;
+    }
     if (sekarang - lastLedToggle >= 120) {
       lastLedToggle = sekarang;
       ledState = !ledState;
@@ -101,10 +200,18 @@ void updateIndikatorLED() {
     return;
   }
 
-  // 1. Saat standby -> mati (LOW)
+  // 1. Saat standby -> mati (LOW) atau kedip jika ledStandby aktif
   if (berhentiTotalScan) {
-    ledState = LOW;
-    digitalWrite(PIN_LED_STATUS, LOW);
+    if (!ledStandby) {
+      ledState = LOW;
+      digitalWrite(PIN_LED_STATUS, LOW);
+      return;
+    }
+    if (sekarang - lastLedToggle >= 1500) {
+      lastLedToggle = sekarang;
+      ledState = !ledState;
+      digitalWrite(PIN_LED_STATUS, ledState ? HIGH : LOW);
+    }
     return;
   }
 
@@ -115,7 +222,12 @@ void updateIndikatorLED() {
     return;
   }
 
-  // 2. Saat wake up / belum terhubung (cari Wi-Fi) -> kedip pelan (700 ms)
+  // 2. Saat wake up / belum terhubung (cari Wi-Fi) -> kedip pelan (700 ms) bila ledWakeup aktif
+  if (!ledWakeup) {
+    ledState = LOW;
+    digitalWrite(PIN_LED_STATUS, LOW);
+    return;
+  }
   if (sekarang - lastLedToggle >= 700) {
     lastLedToggle = sekarang;
     ledState = !ledState;
@@ -125,35 +237,39 @@ void updateIndikatorLED() {
 
 void bacaTeganganAki() {
   int nilaiAnalog = analogRead(PIN_VOLT_SENSOR);
-  teganganAki = (nilaiAnalog / 4095.0) * 3.3 * 5.0; 
+  teganganAki = (nilaiAnalog / 4095.0) * 3.3 * 5.0;
 }
 
 void aktifkanWiFiAP() {
   if (!wifiApAktif) {
+    sedangDiModeWakeup = false;
+    berhentiTotalScan = false;
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP("ESP32-Keyless-Config", "12345678");
     wifiApAktif = true;
     waktuMulaiAP = millis();
     lastLedToggle = millis();
-    ledState = HIGH;
-    digitalWrite(PIN_LED_STATUS, HIGH);
-    Serial.println("\n[AP ON-DEMAND] Wi-Fi AP Aktif!");
+    ledState = ledAp ? HIGH : LOW;
+    digitalWrite(PIN_LED_STATUS, ledState);
+    catetLog("AP Config aktif (SSID: ESP32-Keyless-Config)");
 
-    digitalWrite(PIN_BUZZER, HIGH); delay(100);
-    digitalWrite(PIN_BUZZER, LOW);  delay(100);
-    digitalWrite(PIN_BUZZER, HIGH); delay(100);
-    digitalWrite(PIN_BUZZER, LOW);
+    kedipEventLED(ledAp, 2, 100, 100);
+    bunyiPola(buzAp, 2, 100, 100);
   }
 }
 
 void matikanWiFiAP() {
-  if (wifiApAktif) {
+  if (wifiApAktif && !sedangOTA) {
     WiFi.softAPdisconnect(true);
-    WiFi.mode(WIFI_STA);
+    if (!berhentiTotalScan) {
+      WiFi.mode(WIFI_STA);
+    } else {
+      WiFi.mode(WIFI_OFF);
+    }
     wifiApAktif = false;
     lastLedToggle = millis();
     updateIndikatorLED();
-    Serial.println("\n[AP ON-DEMAND] Wi-Fi AP Dimatikan.");
+    catetLog("AP Config dimatikan");
   }
 }
 
@@ -184,6 +300,19 @@ void loadConfigList() {
   if (jumlahTapConfigAP < 2) jumlahTapConfigAP = 2;
   if (jumlahTapConfigAP > 5) jumlahTapConfigAP = 5;
 
+  ledWakeup  = preferences.getBool("led_wu", true);
+  buzWakeup  = preferences.getBool("buz_wu", true);
+  ledStandby = preferences.getBool("led_sb", true);
+  buzStandby = preferences.getBool("buz_sb", true);
+  ledWifi    = preferences.getBool("led_wf", true);
+  buzWifi    = preferences.getBool("buz_wf", true);
+  ledRfid    = preferences.getBool("led_rf", true);
+  buzRfid    = preferences.getBool("buz_rf", true);
+  ledAp      = preferences.getBool("led_ap", true);
+  buzAp      = preferences.getBool("buz_ap", true);
+  ledOli     = preferences.getBool("led_ol", true);
+  buzOli     = preferences.getBool("buz_ol", true);
+
   preferences.end();
 }
 
@@ -198,6 +327,23 @@ void simpanSensitivitas() {
   preferences.putULong("getar_ms", durasiStabilGetarMs);
   preferences.putULong("btn_ms", debounceTombolMs);
   preferences.putInt("btn_tap", jumlahTapConfigAP);
+  preferences.end();
+}
+
+void simpanSetelanProses() {
+  preferences.begin("wifi_keys", false);
+  preferences.putBool("led_wu", ledWakeup);
+  preferences.putBool("buz_wu", buzWakeup);
+  preferences.putBool("led_sb", ledStandby);
+  preferences.putBool("buz_sb", buzStandby);
+  preferences.putBool("led_wf", ledWifi);
+  preferences.putBool("buz_wf", buzWifi);
+  preferences.putBool("led_rf", ledRfid);
+  preferences.putBool("buz_rf", buzRfid);
+  preferences.putBool("led_ap", ledAp);
+  preferences.putBool("buz_ap", buzAp);
+  preferences.putBool("led_ol", ledOli);
+  preferences.putBool("buz_ol", buzOli);
   preferences.end();
 }
 
@@ -224,21 +370,58 @@ void setupWebServer() {
   });
 
   server.on("/getdata", HTTP_GET, [](AsyncWebServerRequest *request){
-    bacaTeganganAki(); 
-    String json = "{\"total_menit\":" + String(totalJamKerjaMenit) + 
-                  ",\"tegangan\":" + String(teganganAki, 1) + 
+    bacaTeganganAki();
+    String json = "{\"total_menit\":" + String(totalJamKerjaMenit) +
+                  ",\"tegangan\":" + String(teganganAki, 1) +
                   ",\"getar_ms\":" + String(durasiStabilGetarMs) +
                   ",\"btn_ms\":" + String(debounceTombolMs) +
                   ",\"btn_tap\":" + String(jumlahTapConfigAP) +
+                  ",\"led_wakeup\":" + String(ledWakeup ? 1 : 0) +
+                  ",\"buz_wakeup\":" + String(buzWakeup ? 1 : 0) +
+                  ",\"led_standby\":" + String(ledStandby ? 1 : 0) +
+                  ",\"buz_standby\":" + String(buzStandby ? 1 : 0) +
+                  ",\"led_wifi\":" + String(ledWifi ? 1 : 0) +
+                  ",\"buz_wifi\":" + String(buzWifi ? 1 : 0) +
+                  ",\"led_rfid\":" + String(ledRfid ? 1 : 0) +
+                  ",\"buz_rfid\":" + String(buzRfid ? 1 : 0) +
+                  ",\"led_ap\":" + String(ledAp ? 1 : 0) +
+                  ",\"buz_ap\":" + String(buzAp ? 1 : 0) +
+                  ",\"led_oli\":" + String(ledOli ? 1 : 0) +
+                  ",\"buz_oli\":" + String(buzOli ? 1 : 0) +
                   ",\"wifis\":[";
-    for(int i=0; i<keynumber; i++){
-      json += "{\"ssid\":\"" + SSIDkey[i] + "\",\"bssid\":\"" + BSSIDkey[i] + "\",\"rssi\":" + String(RSSItresh[i]) + "}";
-      if(i < keynumber - 1) json += ",";
+    for (int i = 0; i < keynumber; i++) {
+      json += "{\"ssid\":\"" + escapeJsonString(SSIDkey[i]) + "\",\"bssid\":\"" + escapeJsonString(BSSIDkey[i]) + "\",\"rssi\":" + String(RSSItresh[i]) + "}";
+      if (i < keynumber - 1) json += ",";
     }
     json += "],\"rfids\":[";
-    for(int i=0; i<rfidCount; i++){
-      json += "\"" + rfidKeyUID[i] + "\"";
-      if(i < rfidCount - 1) json += ",";
+    for (int i = 0; i < rfidCount; i++) {
+      json += "\"" + escapeJsonString(rfidKeyUID[i]) + "\"";
+      if (i < rfidCount - 1) json += ",";
+    }
+    json += "]}";
+    request->send(200, "application/json", json);
+  });
+
+  server.on("/logs", HTTP_GET, [](AsyncWebServerRequest *request){
+    uint32_t since = 0;
+    if (request->hasParam("since")) {
+      since = request->getParam("since")->value().toInt();
+    }
+
+    uint32_t oldestAvailable = (totalLogCount > (uint32_t)MAX_LOG_LINES)
+                               ? (totalLogCount - (uint32_t)MAX_LOG_LINES)
+                               : 0;
+    if (since < oldestAvailable) {
+      since = oldestAvailable;
+    }
+
+    String json = "{\"next\":" + String(totalLogCount) + ",\"lines\":[";
+    bool first = true;
+    for (uint32_t idx = since; idx < totalLogCount; idx++) {
+      int slot = (int)(idx % (uint32_t)MAX_LOG_LINES);
+      if (!first) json += ",";
+      json += "\"" + escapeJsonString(logBuffer[slot]) + "\"";
+      first = false;
     }
     json += "]}";
     request->send(200, "application/json", json);
@@ -258,6 +441,7 @@ void setupWebServer() {
       debounceTombolMs    = b;
       jumlahTapConfigAP   = t;
       simpanSensitivitas();
+      catetLog("Sensitivitas disimpan: getar=" + String(g) + "ms, btn=" + String(b) + "ms, tap=" + String(t) + "x");
 
       request->send(200, "text/plain", "OK");
     } else {
@@ -265,15 +449,35 @@ void setupWebServer() {
     }
   });
 
+  server.on("/saveproses", HTTP_POST, [](AsyncWebServerRequest *request){
+    ledWakeup  = parseBoolParam(request, "led_wakeup",  ledWakeup);
+    buzWakeup  = parseBoolParam(request, "buz_wakeup",  buzWakeup);
+    ledStandby = parseBoolParam(request, "led_standby", ledStandby);
+    buzStandby = parseBoolParam(request, "buz_standby", buzStandby);
+    ledWifi    = parseBoolParam(request, "led_wifi",    ledWifi);
+    buzWifi    = parseBoolParam(request, "buz_wifi",    buzWifi);
+    ledRfid    = parseBoolParam(request, "led_rfid",    ledRfid);
+    buzRfid    = parseBoolParam(request, "buz_rfid",    buzRfid);
+    ledAp      = parseBoolParam(request, "led_ap",      ledAp);
+    buzAp      = parseBoolParam(request, "buz_ap",      buzAp);
+    ledOli     = parseBoolParam(request, "led_oli",     ledOli);
+    buzOli     = parseBoolParam(request, "buz_oli",     buzOli);
+
+    simpanSetelanProses();
+    updateIndikatorLED();
+    catetLog("Setelan LED & Buzzer per proses diperbarui");
+    request->send(200, "text/plain", "OK");
+  });
+
   server.on("/savewifi", HTTP_POST, [](AsyncWebServerRequest *request){
-    if (request->hasParam("ssid", true) && request->hasParam("bssid", true) && request->hasParam("rssi", true)) {
+    if (request->hasParam("ssid", true) && request->hasParam("rssi", true)) {
       if (keynumber >= 5) {
         request->send(200, "text/html", "<h3>Maksimal 5 WiFi! <a href='/'>Kembali</a></h3>");
         return;
       }
       String newSsid = request->getParam("ssid", true)->value();
-      String newBssid = request->getParam("bssid", true)->value();
-      newBssid.toUpperCase(); 
+      String newBssid = request->hasParam("bssid", true) ? request->getParam("bssid", true)->value() : "";
+      newBssid.toUpperCase();
       int newRssi = request->getParam("rssi", true)->value().toInt();
 
       SSIDkey[keynumber] = newSsid;
@@ -288,6 +492,7 @@ void setupWebServer() {
       preferences.putInt("keynumber", keynumber);
       preferences.end();
 
+      catetLog("Wi-Fi disimpan: " + newSsid + " (min RSSI: " + String(newRssi) + " dBm)");
       request->send(200, "text/html", "<h3>WiFi Berhasil Disimpan! <a href='/'>Kembali</a></h3>");
     } else {
       request->send(400, "text/html", "<h3>Gagal menyimpan.</h3>");
@@ -299,7 +504,8 @@ void setupWebServer() {
       request->send(200, "text/html", "<h3>Maksimal 5 kartu! <a href='/'>Kembali</a></h3>");
       return;
     }
-    modeSettingWeb = true; 
+    modeSettingWeb = true;
+    catetLog("Mode rekam kartu RFID baru aktif");
     request->send(200, "text/html", "<h3>Tempelkan kartu RFID baru ke modul... <a href='/'>Kembali</a></h3>");
   });
 
@@ -307,6 +513,7 @@ void setupWebServer() {
     totalJamKerjaMenit = 0;
     peringatanOliSudahBunyi = false;
     simpanJamOli();
+    catetLog("Timer oli direset ke 0");
     request->send(200, "text/html", "<h3>Timer Oli Direset! <a href='/'>Kembali</a></h3>");
   });
 
@@ -314,355 +521,63 @@ void setupWebServer() {
     preferences.begin("wifi_keys", false);
     preferences.clear();
     preferences.end();
+    catetLog("Factory reset konfigurasi, restart ESP32...");
     request->send(200, "text/html", "<h3>Data Dihapus! Restart ESP32...</h3>");
     delay(1000);
     ESP.restart();
   });
 
   server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *request){
+    catetLog("Restart ESP32 diminta dari web");
     request->send(200, "text/html", "<h3>ESP32 Memulai ulang...</h3>");
     delay(1000);
     ESP.restart();
   });
 
   server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request){
-    bool updateSuccess = !Update.hasError();
-    AsyncWebServerResponse *response = request->beginResponse(200, "text/html", updateSuccess ? 
+    bool updateSuccess = !Update.hasError() && Update.isFinished();
+    catetLog(updateSuccess ? "OTA berhasil, restart..." : "OTA gagal!");
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/html", updateSuccess ?
       "<h3>Update Berhasil! Restart...</h3>" : "<h3>Gagal Update! <a href='/'>Kembali</a></h3>");
     response->addHeader("Connection", "close");
     request->send(response);
-    delay(1000);
-    ESP.restart();
+    sedangOTA = false;
+    if (updateSuccess) {
+      delay(1000);
+      ESP.restart();
+    }
   }, [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final){
-    if(!index){
-      if(!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
+    if (!index) {
+      sedangOTA = true;
+      catetLog("OTA mulai: " + filename);
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+        catetLog("OTA Update.begin gagal");
+      }
     }
-    if(len){
-      if(Update.write(data, len) != len) Update.printError(Serial);
+    if (len && Update.isRunning()) {
+      if (Update.write(data, len) != len) {
+        Update.printError(Serial);
+      }
     }
-    if(final){
-      if(Update.end(true)) Serial.println("[OTA] Selesai");
+    if (final) {
+      if (Update.end(true)) {
+        catetLog("OTA selesai & terverifikasi");
+      } else {
+        Update.printError(Serial);
+        catetLog("OTA Update.end gagal");
+      }
     }
   });
 
   server.begin();
 }
 
-// ==================== FUNGSI BUZZER & STANDALONE ====================
+// ==================== FUNGSI BUZZER, LED & MODE ====================
 void bunyiWakeupTombol() {
-  digitalWrite(PIN_BUZZER, HIGH);
-  delay(60);
-  digitalWrite(PIN_BUZZER, LOW);
+  kedipEventLED(ledWakeup, 1, 60, 0);
+  bunyiPulsa(buzWakeup, 60);
 }
 
 void bunyiWakeupGetar() {
-  for (int i = 0; i < 2; i++) {
-    digitalWrite(PIN_BUZZER, HIGH);
-    delay(60);
-    digitalWrite(PIN_BUZZER, LOW);
-    if (i == 0) delay(70);
-  }
-}
-
-void bunyiStandby() { for (int i = 0; i < 3; i++) { digitalWrite(PIN_BUZZER, HIGH); delay(50); digitalWrite(PIN_BUZZER, LOW); delay(50); } }
-void bunyiWifiTerhubung() { digitalWrite(PIN_BUZZER, HIGH); delay(80); digitalWrite(PIN_BUZZER, LOW); delay(80); digitalWrite(PIN_BUZZER, HIGH); delay(80); digitalWrite(PIN_BUZZER, LOW); }
-void bunyiWifiTerputus() { digitalWrite(PIN_BUZZER, HIGH); delay(400); digitalWrite(PIN_BUZZER, LOW); }
-void bunyiBuzzerBuka() { digitalWrite(PIN_BUZZER, HIGH); delay(80); digitalWrite(PIN_BUZZER, LOW); delay(80); digitalWrite(PIN_BUZZER, HIGH); delay(80); digitalWrite(PIN_BUZZER, LOW); }
-void bunyiBuzzerKunci() { digitalWrite(PIN_BUZZER, HIGH); delay(250); digitalWrite(PIN_BUZZER, LOW); }
-void bunyiPeringatanOli() { for (int i = 0; i < 4; i++) { digitalWrite(PIN_BUZZER, HIGH); delay(150); digitalWrite(PIN_BUZZER, LOW); delay(150); } }
-
-void masukModeStandby() {
-  sedangDiModeWakeup = false;
-  sedangMenungguStandbyRFID = false;
-  berhentiTotalScan = true;
-  siapBangunGetar = false;
-  sedangMendeteksiGetar = false;
-  sedangMenekanWakeup = false;
-  sedangMencari = false;
-  hitungGagalScanWiFi = 0;
-  matikanWiFiAP();
-  WiFi.mode(WIFI_OFF);
-  mfrc522.PCD_SoftPowerDown();
-  ledState = LOW;
-  digitalWrite(PIN_LED_STATUS, LOW);
-  bunyiStandby();
-}
-
-void masukModeWakeup() {
-  berhentiTotalScan = false;
-  sedangMenungguStandbyRFID = false;
-  siapBangunGetar = false;
-  sedangMendeteksiGetar = false;
-  sedangMenekanWakeup = false;
-  statusTerdeteksiSebelumnya = false;
-  rfidKontakState = false;
-  hitungGagalScanWiFi = 0;
-  sedangMencari = false;
-  waktuMulaiHilang = 0;
-
-  sedangDiModeWakeup = true;
-  waktuMasukModeWakeup = millis();
-
-  lastLedToggle = millis();
-  ledState = HIGH;
-  digitalWrite(PIN_LED_STATUS, HIGH);
-
-  mfrc522.PCD_SoftPowerUp();
-  delay(30);
-  mfrc522.PCD_Init();
-  WiFi.mode(WIFI_STA);
-}
-
-void keluarDariStandby() {
-  masukModeWakeup();
-  delay(1000);
-}
-
-void runDetected() {
-  sedangDiModeWakeup = false;
-  digitalWrite(PIN_RELAY_KEYLESS, HIGH);  
-  digitalWrite(PIN_LED_STATUS, LOW); 
-  if (!statusTerdeteksiSebelumnya) {
-    bunyiWifiTerhubung();
-    statusTerdeteksiSebelumnya = true;
-    waktuMulaiMesinNyala = millis(); 
-    if (totalJamKerjaMenit >= INTERVAL_GANTI_OLI_MENIT && !peringatanOliSudahBunyi) {
-      bunyiPeringatanOli();
-      peringatanOliSudahBunyi = true;
-    }
-  } else {
-    if (millis() - waktuMulaiMesinNyala >= 60000) {
-      totalJamKerjaMenit++;
-      waktuMulaiMesinNyala = millis();
-    }
-  }
-}
-
-void runNotDetected() {
-  digitalWrite(PIN_RELAY_KEYLESS, LOW); 
-  if (statusTerdeteksiSebelumnya) {
-    bunyiWifiTerputus(); 
-    statusTerdeteksiSebelumnya = false;
-    simpanJamOli(); 
-    matikanWiFiAP();
-    // Tidak langsung ke standby, masuk mode wake up dulu
-    masukModeWakeup();
-  }
-}
-
-bool cekRFID() {
-  if (!mfrc522.PICC_IsNewCardPresent() || !mfrc522.PICC_ReadCardSerial()) return false;
-  String content = "";
-  for (byte i = 0; i < mfrc522.uid.size; i++) {
-    content.concat(String(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " "));
-    content.concat(String(mfrc522.uid.uidByte[i], HEX));
-  }
-  content.toUpperCase();
-  String scannedUID = content.substring(1); 
-
-  if (modeSettingWeb) {
-    if (rfidCount < 5) {
-      rfidKeyUID[rfidCount] = scannedUID;
-      rfidCount++;
-      rfidAktif = true;
-      preferences.begin("wifi_keys", false);
-      preferences.putString(("rfid_" + String(rfidCount - 1)).c_str(), scannedUID);
-      preferences.putInt("rfid_count", rfidCount);
-      preferences.end();
-      digitalWrite(PIN_BUZZER, HIGH); delay(200); digitalWrite(PIN_BUZZER, LOW);
-    }
-    modeSettingWeb = false;
-    mfrc522.PICC_HaltA();
-    return true;
-  }
-
-  bool kartuCocok = false;
-  for (int i = 0; i < rfidCount; i++) {
-    if (scannedUID == rfidKeyUID[i]) { kartuCocok = true; break; }
-  }
-
-  if (rfidAktif && kartuCocok) {
-    if (statusTerdeteksiSebelumnya) {
-      unsigned long sekarang = millis();
-      if (sekarang - waktuRfidTapPertama > 2500) rfidTapCount = 0;
-      if (rfidTapCount == 0) waktuRfidTapPertama = sekarang;
-      rfidTapCount++;
-      if (rfidTapCount >= 3) {
-        rfidTapCount = 0;
-        aktifkanWiFiAP();
-        mfrc522.PICC_HaltA();
-        return true;
-      }
-    }
-
-    rfidKontakState = !rfidKontakState; 
-    if (rfidKontakState) {
-      sedangDiModeWakeup = false;
-      digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
-      digitalWrite(PIN_LED_STATUS, LOW); 
-      bunyiBuzzerBuka();
-      waktuMulaiMesinNyala = millis(); 
-      berhentiTotalScan = false; 
-      sedangMenungguStandbyRFID = false;
-      siapBangunGetar = false;
-      hitungGagalScanWiFi = 0;
-      waktuMulaiHilang = millis();
-      statusTerdeteksiSebelumnya = true;
-    } else {
-      digitalWrite(PIN_RELAY_KEYLESS, LOW);  
-      bunyiBuzzerKunci();
-      matikanWiFiAP();
-      // Tidak langsung ke standby, masuk mode wake up dulu
-      masukModeWakeup();
-    }
-    mfrc522.PICC_HaltA();
-    return true;
-  } else {
-    digitalWrite(PIN_BUZZER, HIGH); delay(50); digitalWrite(PIN_BUZZER, LOW); delay(50);
-    digitalWrite(PIN_BUZZER, HIGH); delay(50); digitalWrite(PIN_BUZZER, LOW);
-  }
-  mfrc522.PICC_HaltA();
-  return false;
-}
-
-void detectwifi() {
-  if (berhentiTotalScan || rfidKontakState || sedangMenungguStandbyRFID) return;
-  updateIndikatorLED();
-  int n = WiFi.scanNetworks();
-  bool found = false;
-  for (int i = 0; i < n; ++i) {
-    String scannedSSID = WiFi.SSID(i);
-    String scannedBSSID = WiFi.BSSIDstr(i); 
-    scannedBSSID.toUpperCase();
-    int scannedRSSI = WiFi.RSSI(i);
-    for (int j = 0; j < keynumber; ++j) {
-      if (scannedSSID == SSIDkey[j] && scannedBSSID == BSSIDkey[j] && scannedRSSI >= RSSItresh[j]) {
-        found = true; break;
-      }
-    }
-    if (found) break;
-  }
-  WiFi.scanDelete();
-
-  if (found) {
-    runDetected(); 
-    hitungGagalScanWiFi = 0; 
-    waktuMulaiHilang = 0;
-    sedangMencari = false;
-  } else {
-    hitungGagalScanWiFi++; 
-    if (hitungGagalScanWiFi >= BATAS_TOLERANSI_WIFI) {
-      runNotDetected(); 
-    }
-  }
-  updateIndikatorLED();
-  delay(1000);
-}
-
-void setup() {
-  Serial.begin(115200);
-  delay(100);
-  SPI.begin();
-  mfrc522.PCD_Init();
-  pinMode(PIN_RELAY_KEYLESS, OUTPUT); digitalWrite(PIN_RELAY_KEYLESS, LOW);  
-  pinMode(PIN_BUZZER, OUTPUT); digitalWrite(PIN_BUZZER, LOW);         
-  pinMode(PIN_SIMULASI_GETAR, INPUT_PULLDOWN); 
-  pinMode(PIN_BUTTON_WAKEUP, INPUT_PULLUP); 
-  pinMode(PIN_VOLT_SENSOR, INPUT); 
-  pinMode(PIN_LED_STATUS, OUTPUT); digitalWrite(PIN_LED_STATUS, LOW); 
-  loadConfigList();
-  setupWebServer();
-
-  // Jika belum ada Wi-Fi maupun RFID tersimpan, nyalakan Config AP otomatis
-  if (keynumber == 0 && rfidCount == 0) {
-    aktifkanWiFiAP();
-  }
-}
-
-void loop() {
-  if (wifiApAktif && (millis() - waktuMulaiAP >= TIMEOUT_AP_AUTO_OFF)) {
-    matikanWiFiAP();
-  }
-
-  updateIndikatorLED();
-
-  // Debounce tombol saat mode aktif (buka Config AP sesuai jumlahTapConfigAP)
-  bool reading = digitalRead(PIN_BUTTON_WAKEUP);
-  if (reading != lastButtonReading) {
-    lastButtonChangeTime = millis();
-  }
-  if ((millis() - lastButtonChangeTime) > debounceTombolMs) {
-    if (reading != debouncedButtonState) {
-      debouncedButtonState = reading;
-      if (!berhentiTotalScan && debouncedButtonState == LOW && statusTerdeteksiSebelumnya) {
-        unsigned long sekarang = millis();
-        if (sekarang - waktuButtonTapPertama > 2500) buttonTapCount = 0;
-        if (buttonTapCount == 0) waktuButtonTapPertama = sekarang;
-        buttonTapCount++;
-        if (buttonTapCount >= jumlahTapConfigAP) {
-          buttonTapCount = 0;
-          waktuButtonTapPertama = 0;
-          aktifkanWiFiAP();
-        }
-      }
-    }
-  }
-  lastButtonReading = reading;
-
-  if (berhentiTotalScan) {
-    // 1. Wake up dari tombol (1 bip pendek)
-    if (digitalRead(PIN_BUTTON_WAKEUP) == LOW) {
-      if (!sedangMenekanWakeup) {
-        waktuMulaiTekanWakeup = millis();
-        sedangMenekanWakeup = true;
-      } else if (millis() - waktuMulaiTekanWakeup >= debounceTombolMs) {
-        bunyiWakeupTombol();
-        keluarDariStandby();
-        return;
-      }
-    } else {
-      sedangMenekanWakeup = false;
-    }
-
-    // 2. Wake up dari getar (2 bip pendek)
-    if (!siapBangunGetar) {
-      if (digitalRead(PIN_SIMULASI_GETAR) == LOW) siapBangunGetar = true;
-    } else {
-      if (digitalRead(PIN_SIMULASI_GETAR) == HIGH) {
-        if (!sedangMendeteksiGetar) {
-          waktuGetarMulai = millis();
-          sedangMendeteksiGetar = true;
-        } else if (millis() - waktuGetarMulai >= durasiStabilGetarMs) {
-          bunyiWakeupGetar();
-          keluarDariStandby();
-          return;
-        }
-      } else {
-        sedangMendeteksiGetar = false;
-      }
-    }
-
-    delay(20);
-    return;
-  }
-
-  if (cekRFID()) delay(1500);
-
-  if (sedangDiModeWakeup && !statusTerdeteksiSebelumnya && !rfidKontakState) {
-    if (millis() - waktuMasukModeWakeup >= TIMEOUT_WAKEUP_KE_STANDBY) {
-      masukModeStandby();
-      return;
-    }
-  }
-
-  if (sedangMenungguStandbyRFID) {
-    if (millis() - waktuMulaiStandbyRFID >= 10000) {
-      masukModeStandby();
-      return;
-    }
-    delay(50);
-    return;
-  }
-
-  if (keynumber > 0 || rfidAktif) detectwifi();
-}
+  kedipEventLED(ledWakeup, 2, 60, 70)
