@@ -39,6 +39,11 @@ bool statusTerdeteksiSebelumnya = false;
 unsigned long waktuMulaiStandbyRFID = 0;
 bool sedangMenungguStandbyRFID = false;
 
+// Mode wake up sementara setelah terputus Wi-Fi / dimatikan RFID sebelum ke standby
+unsigned long waktuMasukModeWakeup = 0;
+bool sedangDiModeWakeup = false;
+const unsigned long TIMEOUT_WAKEUP_KE_STANDBY = 30000; // 30 detik sebelum ke standby
+
 int hitungGagalScanWiFi = 0;             
 const int BATAS_TOLERANSI_WIFI = 3;    
 
@@ -77,7 +82,46 @@ unsigned long lastButtonChangeTime = 0;
 unsigned long waktuMulaiTekanWakeup = 0;
 bool sedangMenekanWakeup = false;
 
+// Variabel indikator LED non-blocking
+unsigned long lastLedToggle = 0;
+bool ledState = LOW;
+
 AsyncWebServer server(80);
+
+void updateIndikatorLED() {
+  unsigned long sekarang = millis();
+
+  // 4. Mode AP aktif -> kedip cepat (120 ms)
+  if (wifiApAktif) {
+    if (sekarang - lastLedToggle >= 120) {
+      lastLedToggle = sekarang;
+      ledState = !ledState;
+      digitalWrite(PIN_LED_STATUS, ledState ? HIGH : LOW);
+    }
+    return;
+  }
+
+  // 1. Saat standby -> mati (LOW)
+  if (berhentiTotalScan) {
+    ledState = LOW;
+    digitalWrite(PIN_LED_STATUS, LOW);
+    return;
+  }
+
+  // 3. Saat terhubung RFID / Wi-Fi / kontak ON -> mati (LOW)
+  if (statusTerdeteksiSebelumnya || rfidKontakState) {
+    ledState = LOW;
+    digitalWrite(PIN_LED_STATUS, LOW);
+    return;
+  }
+
+  // 2. Saat wake up / belum terhubung (cari Wi-Fi) -> kedip pelan (700 ms)
+  if (sekarang - lastLedToggle >= 700) {
+    lastLedToggle = sekarang;
+    ledState = !ledState;
+    digitalWrite(PIN_LED_STATUS, ledState ? HIGH : LOW);
+  }
+}
 
 void bacaTeganganAki() {
   int nilaiAnalog = analogRead(PIN_VOLT_SENSOR);
@@ -90,6 +134,8 @@ void aktifkanWiFiAP() {
     WiFi.softAP("ESP32-Keyless-Config", "12345678");
     wifiApAktif = true;
     waktuMulaiAP = millis();
+    lastLedToggle = millis();
+    ledState = HIGH;
     digitalWrite(PIN_LED_STATUS, HIGH);
     Serial.println("\n[AP ON-DEMAND] Wi-Fi AP Aktif!");
 
@@ -105,9 +151,8 @@ void matikanWiFiAP() {
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_STA);
     wifiApAktif = false;
-    if (!statusTerdeteksiSebelumnya) {
-      digitalWrite(PIN_LED_STATUS, LOW);
-    }
+    lastLedToggle = millis();
+    updateIndikatorLED();
     Serial.println("\n[AP ON-DEMAND] Wi-Fi AP Dimatikan.");
   }
 }
@@ -326,24 +371,55 @@ void bunyiBuzzerBuka() { digitalWrite(PIN_BUZZER, HIGH); delay(80); digitalWrite
 void bunyiBuzzerKunci() { digitalWrite(PIN_BUZZER, HIGH); delay(250); digitalWrite(PIN_BUZZER, LOW); }
 void bunyiPeringatanOli() { for (int i = 0; i < 4; i++) { digitalWrite(PIN_BUZZER, HIGH); delay(150); digitalWrite(PIN_BUZZER, LOW); delay(150); } }
 
-void keluarDariStandby() {
-  digitalWrite(PIN_LED_STATUS, HIGH);
-  berhentiTotalScan = false;
+void masukModeStandby() {
+  sedangDiModeWakeup = false;
+  sedangMenungguStandbyRFID = false;
+  berhentiTotalScan = true;
   siapBangunGetar = false;
   sedangMendeteksiGetar = false;
   sedangMenekanWakeup = false;
   sedangMencari = false;
-  statusTerdeteksiSebelumnya = false;
-  waktuMulaiHilang = millis();
   hitungGagalScanWiFi = 0;
+  matikanWiFiAP();
+  WiFi.mode(WIFI_OFF);
+  mfrc522.PCD_SoftPowerDown();
+  ledState = LOW;
+  digitalWrite(PIN_LED_STATUS, LOW);
+  bunyiStandby();
+}
+
+void masukModeWakeup() {
+  berhentiTotalScan = false;
+  sedangMenungguStandbyRFID = false;
+  siapBangunGetar = false;
+  sedangMendeteksiGetar = false;
+  sedangMenekanWakeup = false;
+  statusTerdeteksiSebelumnya = false;
+  rfidKontakState = false;
+  hitungGagalScanWiFi = 0;
+  sedangMencari = false;
+  waktuMulaiHilang = 0;
+
+  sedangDiModeWakeup = true;
+  waktuMasukModeWakeup = millis();
+
+  lastLedToggle = millis();
+  ledState = HIGH;
+  digitalWrite(PIN_LED_STATUS, HIGH);
+
   mfrc522.PCD_SoftPowerUp();
-  delay(50);
+  delay(30);
   mfrc522.PCD_Init();
   WiFi.mode(WIFI_STA);
+}
+
+void keluarDariStandby() {
+  masukModeWakeup();
   delay(1000);
 }
 
 void runDetected() {
+  sedangDiModeWakeup = false;
   digitalWrite(PIN_RELAY_KEYLESS, HIGH);  
   digitalWrite(PIN_LED_STATUS, LOW); 
   if (!statusTerdeteksiSebelumnya) {
@@ -368,7 +444,9 @@ void runNotDetected() {
     bunyiWifiTerputus(); 
     statusTerdeteksiSebelumnya = false;
     simpanJamOli(); 
-    matikanWiFiAP(); 
+    matikanWiFiAP();
+    // Tidak langsung ke standby, masuk mode wake up dulu
+    masukModeWakeup();
   }
 }
 
@@ -419,6 +497,7 @@ bool cekRFID() {
 
     rfidKontakState = !rfidKontakState; 
     if (rfidKontakState) {
+      sedangDiModeWakeup = false;
       digitalWrite(PIN_RELAY_KEYLESS, HIGH); 
       digitalWrite(PIN_LED_STATUS, LOW); 
       bunyiBuzzerBuka();
@@ -431,12 +510,10 @@ bool cekRFID() {
       statusTerdeteksiSebelumnya = true;
     } else {
       digitalWrite(PIN_RELAY_KEYLESS, LOW);  
-      digitalWrite(PIN_LED_STATUS, HIGH); 
       bunyiBuzzerKunci();
-      sedangMenungguStandbyRFID = true;
-      waktuMulaiStandbyRFID = millis();
-      statusTerdeteksiSebelumnya = false;
       matikanWiFiAP();
+      // Tidak langsung ke standby, masuk mode wake up dulu
+      masukModeWakeup();
     }
     mfrc522.PICC_HaltA();
     return true;
@@ -450,6 +527,7 @@ bool cekRFID() {
 
 void detectwifi() {
   if (berhentiTotalScan || rfidKontakState || sedangMenungguStandbyRFID) return;
+  updateIndikatorLED();
   int n = WiFi.scanNetworks();
   bool found = false;
   for (int i = 0; i < n; ++i) {
@@ -475,22 +553,9 @@ void detectwifi() {
     hitungGagalScanWiFi++; 
     if (hitungGagalScanWiFi >= BATAS_TOLERANSI_WIFI) {
       runNotDetected(); 
-      if (!sedangMencari) { waktuMulaiHilang = millis(); sedangMencari = true; }
-      if (millis() - waktuMulaiHilang >= 10000) {
-        bunyiStandby(); 
-        berhentiTotalScan = true; 
-        siapBangunGetar = false;
-        sedangMendeteksiGetar = false;
-        sedangMenekanWakeup = false;
-        sedangMencari = false;
-        hitungGagalScanWiFi = 0;
-        matikanWiFiAP();
-        WiFi.mode(WIFI_OFF);
-        mfrc522.PCD_SoftPowerDown();
-        digitalWrite(PIN_LED_STATUS, LOW); 
-      }
     }
   }
+  updateIndikatorLED();
   delay(1000);
 }
 
@@ -518,6 +583,8 @@ void loop() {
   if (wifiApAktif && (millis() - waktuMulaiAP >= TIMEOUT_AP_AUTO_OFF)) {
     matikanWiFiAP();
   }
+
+  updateIndikatorLED();
 
   // Debounce tombol saat mode aktif (buka Config AP sesuai jumlahTapConfigAP)
   bool reading = digitalRead(PIN_BUTTON_WAKEUP);
@@ -553,51 +620,4 @@ void loop() {
         keluarDariStandby();
         return;
       }
-    } else {
-      sedangMenekanWakeup = false;
-    }
-
-    // 2. Wake up dari getar (2 bip pendek)
-    if (!siapBangunGetar) {
-      if (digitalRead(PIN_SIMULASI_GETAR) == LOW) siapBangunGetar = true;
-    } else {
-      if (digitalRead(PIN_SIMULASI_GETAR) == HIGH) {
-        if (!sedangMendeteksiGetar) {
-          waktuGetarMulai = millis();
-          sedangMendeteksiGetar = true;
-        } else if (millis() - waktuGetarMulai >= durasiStabilGetarMs) {
-          bunyiWakeupGetar();
-          keluarDariStandby();
-          return;
-        }
-      } else {
-        sedangMendeteksiGetar = false;
-      }
-    }
-
-    delay(20);
-    return; 
-  }
-
-  if (cekRFID()) delay(1500); 
-
-  if (sedangMenungguStandbyRFID) {
-    if (millis() - waktuMulaiStandbyRFID >= 10000) {
-      bunyiStandby(); 
-      sedangMenungguStandbyRFID = false;
-      berhentiTotalScan = true; 
-      siapBangunGetar = false;
-      sedangMendeteksiGetar = false;
-      sedangMenekanWakeup = false;
-      hitungGagalScanWiFi = 0;
-      matikanWiFiAP();
-      WiFi.mode(WIFI_OFF);
-      mfrc522.PCD_SoftPowerDown();
-      digitalWrite(PIN_LED_STATUS, LOW); 
-    }
-    delay(50);
-    return;
-  }
-
-  if (keynumber > 0 || rfidAktif) detectwifi();
-}
+  
