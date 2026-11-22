@@ -45,7 +45,11 @@ const int BATAS_TOLERANSI_WIFI = 3;
 unsigned long waktuGetarMulai = 0;
 bool sedangMendeteksiGetar = false;
 bool siapBangunGetar = false;          
-const unsigned long DURASI_STABIL_GETAR = 450; 
+
+// Sensitivitas tersimpan di Preferences (dapat diubah lewat Web Config)
+unsigned long durasiStabilGetarMs = 250; // ms (makin kecil makin responsif/sensitif)
+unsigned long debounceTombolMs    = 60;  // ms
+int jumlahTapConfigAP             = 3;   // 2 - 5 kali tekan
 
 unsigned long totalJamKerjaMenit = 0;  
 unsigned long waktuMulaiMesinNyala = 0;
@@ -62,18 +66,16 @@ const unsigned long TIMEOUT_AP_AUTO_OFF = 120000;
 int rfidTapCount = 0;
 unsigned long waktuRfidTapPertama = 0;
 
-// Variabel debounce tombol 3x tekan (saat aktif)
+// Variabel debounce tombol saat aktif
 int buttonTapCount = 0;
 unsigned long waktuButtonTapPertama = 0;
 bool lastButtonReading = HIGH;
 bool debouncedButtonState = HIGH;
 unsigned long lastButtonChangeTime = 0;
-const unsigned long DEBOUNCE_DELAY_BTN = 50;
 
-// Variabel debounce wake up tombol (saat standby)
+// Variabel wake up tombol saat standby
 unsigned long waktuMulaiTekanWakeup = 0;
 bool sedangMenekanWakeup = false;
-const unsigned long DEBOUNCE_WAKEUP_BTN = 60;
 
 AsyncWebServer server(80);
 
@@ -126,12 +128,31 @@ void loadConfigList() {
   }
   rfidAktif = (rfidCount > 0);
   totalJamKerjaMenit = preferences.getULong("oli_menit", 0);
+
+  durasiStabilGetarMs = preferences.getULong("getar_ms", 250);
+  debounceTombolMs    = preferences.getULong("btn_ms", 60);
+  jumlahTapConfigAP   = preferences.getInt("btn_tap", 3);
+  if (durasiStabilGetarMs < 50) durasiStabilGetarMs = 50;
+  if (durasiStabilGetarMs > 2000) durasiStabilGetarMs = 2000;
+  if (debounceTombolMs < 20) debounceTombolMs = 20;
+  if (debounceTombolMs > 500) debounceTombolMs = 500;
+  if (jumlahTapConfigAP < 2) jumlahTapConfigAP = 2;
+  if (jumlahTapConfigAP > 5) jumlahTapConfigAP = 5;
+
   preferences.end();
 }
 
 void simpanJamOli() {
   preferences.begin("wifi_keys", false);
   preferences.putULong("oli_menit", totalJamKerjaMenit);
+  preferences.end();
+}
+
+void simpanSensitivitas() {
+  preferences.begin("wifi_keys", false);
+  preferences.putULong("getar_ms", durasiStabilGetarMs);
+  preferences.putULong("btn_ms", debounceTombolMs);
+  preferences.putInt("btn_tap", jumlahTapConfigAP);
   preferences.end();
 }
 
@@ -161,6 +182,9 @@ void setupWebServer() {
     bacaTeganganAki(); 
     String json = "{\"total_menit\":" + String(totalJamKerjaMenit) + 
                   ",\"tegangan\":" + String(teganganAki, 1) + 
+                  ",\"getar_ms\":" + String(durasiStabilGetarMs) +
+                  ",\"btn_ms\":" + String(debounceTombolMs) +
+                  ",\"btn_tap\":" + String(jumlahTapConfigAP) +
                   ",\"wifis\":[";
     for(int i=0; i<keynumber; i++){
       json += "{\"ssid\":\"" + SSIDkey[i] + "\",\"bssid\":\"" + BSSIDkey[i] + "\",\"rssi\":" + String(RSSItresh[i]) + "}";
@@ -173,6 +197,27 @@ void setupWebServer() {
     }
     json += "]}";
     request->send(200, "application/json", json);
+  });
+
+  server.on("/savesens", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (request->hasParam("getar_ms", true) && request->hasParam("btn_ms", true) && request->hasParam("btn_tap", true)) {
+      unsigned long g = request->getParam("getar_ms", true)->value().toInt();
+      unsigned long b = request->getParam("btn_ms", true)->value().toInt();
+      int t           = request->getParam("btn_tap", true)->value().toInt();
+
+      if (g < 50) g = 50;     if (g > 2000) g = 2000;
+      if (b < 20) b = 20;     if (b > 500) b = 500;
+      if (t < 2) t = 2;       if (t > 5) t = 5;
+
+      durasiStabilGetarMs = g;
+      debounceTombolMs    = b;
+      jumlahTapConfigAP   = t;
+      simpanSensitivitas();
+
+      request->send(200, "text/plain", "OK");
+    } else {
+      request->send(400, "text/plain", "Bad Request");
+    }
   });
 
   server.on("/savewifi", HTTP_POST, [](AsyncWebServerRequest *request){
@@ -462,6 +507,11 @@ void setup() {
   pinMode(PIN_LED_STATUS, OUTPUT); digitalWrite(PIN_LED_STATUS, LOW); 
   loadConfigList();
   setupWebServer();
+
+  // Jika belum ada Wi-Fi maupun RFID tersimpan, nyalakan Config AP otomatis
+  if (keynumber == 0 && rfidCount == 0) {
+    aktifkanWiFiAP();
+  }
 }
 
 void loop() {
@@ -469,12 +519,12 @@ void loop() {
     matikanWiFiAP();
   }
 
-  // Debounce tombol saat mode aktif (untuk 3x tekan -> aktifkan Config AP)
+  // Debounce tombol saat mode aktif (buka Config AP sesuai jumlahTapConfigAP)
   bool reading = digitalRead(PIN_BUTTON_WAKEUP);
   if (reading != lastButtonReading) {
     lastButtonChangeTime = millis();
   }
-  if ((millis() - lastButtonChangeTime) > DEBOUNCE_DELAY_BTN) {
+  if ((millis() - lastButtonChangeTime) > debounceTombolMs) {
     if (reading != debouncedButtonState) {
       debouncedButtonState = reading;
       if (!berhentiTotalScan && debouncedButtonState == LOW && statusTerdeteksiSebelumnya) {
@@ -482,7 +532,7 @@ void loop() {
         if (sekarang - waktuButtonTapPertama > 2500) buttonTapCount = 0;
         if (buttonTapCount == 0) waktuButtonTapPertama = sekarang;
         buttonTapCount++;
-        if (buttonTapCount >= 3) {
+        if (buttonTapCount >= jumlahTapConfigAP) {
           buttonTapCount = 0;
           waktuButtonTapPertama = 0;
           aktifkanWiFiAP();
@@ -498,7 +548,7 @@ void loop() {
       if (!sedangMenekanWakeup) {
         waktuMulaiTekanWakeup = millis();
         sedangMenekanWakeup = true;
-      } else if (millis() - waktuMulaiTekanWakeup >= DEBOUNCE_WAKEUP_BTN) {
+      } else if (millis() - waktuMulaiTekanWakeup >= debounceTombolMs) {
         bunyiWakeupTombol();
         keluarDariStandby();
         return;
@@ -515,7 +565,7 @@ void loop() {
         if (!sedangMendeteksiGetar) {
           waktuGetarMulai = millis();
           sedangMendeteksiGetar = true;
-        } else if (millis() - waktuGetarMulai >= DURASI_STABIL_GETAR) {
+        } else if (millis() - waktuGetarMulai >= durasiStabilGetarMs) {
           bunyiWakeupGetar();
           keluarDariStandby();
           return;
