@@ -85,7 +85,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             font-size: 1.2rem;
             color: var(--text-color);
         }
-        form label {
+        form label, .card label {
             display: block;
             margin-top: 10px;
             font-size: 0.85rem;
@@ -125,7 +125,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         .btn-success:hover { background-color: #16a34a; }
         .btn-warning { background-color: #eab308; color: #0f172a; }
         .btn-warning:hover { background-color: #ca8a04; }
-        
+
         ul { padding-left: 20px; margin: 5px 0; color: var(--text-muted); font-size: 0.9rem; }
         li { margin-bottom: 5px; }
         .badge {
@@ -135,7 +135,6 @@ const char index_html[] PROGMEM = R"rawliteral(
             font-size: 0.8rem;
             color: #fff;
         }
-        /* Style Halaman Login */
         #login-screen {
             display: flex;
             flex-direction: column;
@@ -151,6 +150,12 @@ const char index_html[] PROGMEM = R"rawliteral(
             text-align: center;
             margin-top: 10px;
             display: none;
+        }
+        .status-msg {
+            font-size: 0.85rem;
+            text-align: center;
+            margin-top: 8px;
+            min-height: 18px;
         }
     </style>
 </head>
@@ -195,6 +200,21 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
 
             <div class="card">
+                <h3>Sensitivitas Getar & Tombol</h3>
+                <label>Durasi Stabil Getar (ms) — makin kecil makin sensitif:</label>
+                <input type="number" id="getar_ms" min="50" max="2000" step="10" value="250">
+
+                <label>Debounce Tombol (ms):</label>
+                <input type="number" id="btn_ms" min="20" max="500" step="5" value="60">
+
+                <label>Jumlah Tekan Buka Config AP (2 - 5x):</label>
+                <input type="number" id="btn_tap" min="2" max="5" step="1" value="3">
+
+                <button type="button" onclick="simpanSensitivitas()">Simpan Sensitivitas</button>
+                <div id="sens-status" class="status-msg"></div>
+            </div>
+
+            <div class="card">
                 <h3>Daftar Perangkat Wi-Fi (Max 5)</h3>
                 <ul id="wifi-list">Memuat data...</ul>
                 <form action="/savewifi" method="POST">
@@ -230,12 +250,19 @@ const char index_html[] PROGMEM = R"rawliteral(
 
     <script>
         let refreshInterval;
+        let isEditingSens = false;
 
-        // Cek sesi login saat halaman dibuka
         window.onload = function() {
             if (sessionStorage.getItem("isLoggedIn") === "true") {
                 showDashboard();
             }
+            ["getar_ms", "btn_ms", "btn_tap"].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.addEventListener("focus", () => { isEditingSens = true; });
+                    el.addEventListener("blur", () => { isEditingSens = false; });
+                }
+            });
         };
 
         function handleLogin() {
@@ -274,16 +301,40 @@ const char index_html[] PROGMEM = R"rawliteral(
         function showDashboard() {
             document.getElementById("login-screen").style.display = "none";
             document.getElementById("dashboard-screen").style.display = "block";
-            fetchData();
-            refreshInterval = setInterval(fetchData, 3000);
+            fetchData(true);
+            refreshInterval = setInterval(() => fetchData(false), 3000);
         }
 
-        function fetchData() {
+        function simpanSensitivitas() {
+            const statusEl = document.getElementById("sens-status");
+            const body = new URLSearchParams({
+                getar_ms: document.getElementById("getar_ms").value,
+                btn_ms: document.getElementById("btn_ms").value,
+                btn_tap: document.getElementById("btn_tap").value
+            });
+
+            fetch("/savesens", {
+                method: "POST",
+                body: body
+            })
+            .then(res => {
+                if (res.ok) {
+                    statusEl.innerHTML = "<span style='color:#22c55e;'>✔ Sensitivitas tersimpan!</span>";
+                } else {
+                    statusEl.innerHTML = "<span style='color:#ef4444;'>✖ Gagal menyimpan sensitivitas.</span>";
+                }
+            })
+            .catch(() => {
+                statusEl.innerHTML = "<span style='color:#ef4444;'>✖ Kesalahan koneksi.</span>";
+            });
+        }
+
+        function fetchData(forceSyncSens) {
             fetch('/getdata')
                 .then(response => response.json())
                 .then(data => {
                     document.getElementById('val-volt').innerText = data.tegangan + ' V';
-                    
+
                     let totalMenit = data.total_menit;
                     let jam = Math.floor(totalMenit / 60);
                     let menit = totalMenit % 60;
@@ -294,6 +345,12 @@ const char index_html[] PROGMEM = R"rawliteral(
                         warningEl.innerHTML = "<span style='color: #ef4444;'>⚠️ WAKTU GANTI OLI MESIN! (>200 Jam)</span>";
                     } else {
                         warningEl.innerHTML = "<span style='color: #22c55e;'>✔ Kondisi Oli Normal</span>";
+                    }
+
+                    if (forceSyncSens || !isEditingSens) {
+                        if (data.getar_ms !== undefined) document.getElementById('getar_ms').value = data.getar_ms;
+                        if (data.btn_ms !== undefined) document.getElementById('btn_ms').value = data.btn_ms;
+                        if (data.btn_tap !== undefined) document.getElementById('btn_tap').value = data.btn_tap;
                     }
 
                     let wifiHtml = '';
