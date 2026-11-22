@@ -102,6 +102,11 @@ const char index_html[] PROGMEM = R"rawliteral(
             box-sizing: border-box;
             font-size: 0.95rem;
         }
+        .proc-grid select {
+            margin-top: 0;
+            padding: 7px 8px;
+            font-size: 0.85rem;
+        }
         button {
             width: 100%;
             padding: 12px;
@@ -115,16 +120,20 @@ const char index_html[] PROGMEM = R"rawliteral(
             cursor: pointer;
             transition: background 0.2s;
         }
-        button:hover {
+        button:hover:not(:disabled) {
             background-color: var(--accent-hover);
             color: #fff;
         }
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
         .btn-danger { background-color: var(--danger-color); color: white; }
-        .btn-danger:hover { background-color: #dc2626; }
+        .btn-danger:hover:not(:disabled) { background-color: #dc2626; }
         .btn-success { background-color: var(--success-color); color: white; }
-        .btn-success:hover { background-color: #16a34a; }
+        .btn-success:hover:not(:disabled) { background-color: #16a34a; }
         .btn-warning { background-color: #eab308; color: #0f172a; }
-        .btn-warning:hover { background-color: #ca8a04; }
+        .btn-warning:hover:not(:disabled) { background-color: #ca8a04; }
 
         ul { padding-left: 20px; margin: 5px 0; color: var(--text-muted); font-size: 0.9rem; }
         li { margin-bottom: 5px; }
@@ -200,6 +209,15 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
 
             <div class="card">
+                <h3>Live Monitor (Serial / Event Log)</h3>
+                <div id="term-box" style="background:#020617; border:1px solid var(--border-color); border-radius:8px; padding:10px; height:190px; overflow-y:auto; font-family:Consolas, monospace; font-size:0.78rem; line-height:1.4; color:#cbd5e1; white-space:pre-wrap; word-break:break-word;">Menunggu log...</div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;">
+                    <button type="button" id="btn-pause-log" onclick="togglePauseLog()" style="margin-top:0; background:#334155; color:#fff; padding:9px; font-size:0.85rem;">Pause</button>
+                    <button type="button" onclick="clearTerminalLog()" style="margin-top:0; background:#334155; color:#fff; padding:9px; font-size:0.85rem;">Bersihkan</button>
+                </div>
+            </div>
+
+            <div class="card">
                 <h3>Sensitivitas Getar & Tombol</h3>
                 <label>Durasi Stabil Getar (ms) — makin kecil makin sensitif:</label>
                 <input type="number" id="getar_ms" min="50" max="2000" step="10" value="250">
@@ -215,13 +233,49 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
 
             <div class="card">
+                <h3>LED & Buzzer Per Proses</h3>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0;">Atur nyala lampu LED dan bunyi buzzer di setiap kondisi.</p>
+
+                <div class="proc-grid" style="display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:8px; align-items:center; margin-top:10px; font-size:0.85rem;">
+                    <strong>Proses</strong>
+                    <strong style="text-align:center;">LED</strong>
+                    <strong style="text-align:center;">Buzzer</strong>
+
+                    <span>Wake-Up</span>
+                    <select id="led_wakeup"><option value="1">ON</option><option value="0">OFF</option></select>
+                    <select id="buz_wakeup"><option value="1">ON</option><option value="0">OFF</option></select>
+
+                    <span>Standby</span>
+                    <select id="led_standby"><option value="1">ON</option><option value="0">OFF</option></select>
+                    <select id="buz_standby"><option value="1">ON</option><option value="0">OFF</option></select>
+
+                    <span>Wi-Fi ON/OFF</span>
+                    <select id="led_wifi"><option value="1">ON</option><option value="0">OFF</option></select>
+                    <select id="buz_wifi"><option value="1">ON</option><option value="0">OFF</option></select>
+
+                    <span>Kontak RFID</span>
+                    <select id="led_rfid"><option value="1">ON</option><option value="0">OFF</option></select>
+                    <select id="buz_rfid"><option value="1">ON</option><option value="0">OFF</option></select>
+
+                    <span>Mode AP Config</span>
+                    <select id="led_ap"><option value="1">ON</option><option value="0">OFF</option></select>
+                    <select id="buz_ap"><option value="1">ON</option><option value="0">OFF</option></select>
+
+                    <span>Peringatan Oli</span>
+                    <select id="led_oli"><option value="1">ON</option><option value="0">OFF</option></select>
+                    <select id="buz_oli"><option value="1">ON</option><option value="0">OFF</option></select>
+                </div>
+
+                <button type="button" onclick="simpanProsesNotif()">Simpan LED & Buzzer</button>
+                <div id="proses-status" class="status-msg"></div>
+            </div>
+
+            <div class="card">
                 <h3>Daftar Perangkat Wi-Fi (Max 5)</h3>
                 <ul id="wifi-list">Memuat data...</ul>
                 <form action="/savewifi" method="POST">
                     <label>Nama WiFi (SSID HP):</label>
                     <input type="text" name="ssid" required placeholder="Contoh: Hotspot HP Saya">
-                    <label>MAC Address (BSSID):</label>
-                    <input type="text" name="bssid" required placeholder="Contoh: AA:BB:CC:DD:EE:FF">
                     <label>Minimal RSSI:</label>
                     <select name="rssi">
                         <option value="-60">Dekat Sekali (-60 dBm)</option>
@@ -243,20 +297,44 @@ const char index_html[] PROGMEM = R"rawliteral(
                 <a href="/resetoli"><button class="btn-warning" type="button">Reset Timer Oli Mesin</button></a>
                 <a href="/resetwifi"><button class="btn-danger" type="button" onclick="return confirm('Hapus seluruh konfigurasi?')">Factory Reset</button></a>
                 <a href="/restart"><button type="button" style="background:#475569; color:#fff;">Restart ESP32</button></a>
+
+                <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 18px 0;">
+                <h4 style="margin: 0 0 8px 0; color: var(--accent-color); font-size: 0.95rem;">Update Firmware (OTA .bin)</h4>
+                <form id="ota-form" onsubmit="uploadOTA(event)">
+                    <input type="file" id="ota-file" name="update" accept=".bin" required>
+                    <button type="submit" id="ota-btn" class="btn-success">Upload Firmware OTA</button>
+                </form>
+                <div id="ota-status" class="status-msg"></div>
+
                 <button type="button" class="btn-danger" onclick="handleLogout()" style="margin-top: 25px;">Keluar (Logout)</button>
             </div>
         </div>
     </div>
 
     <script>
-        let refreshInterval;
+        let dataRefreshInterval = null;
+        let logRefreshInterval = null;
         let isEditingSens = false;
+
+        let logCursor = 0;
+        let isLogPaused = false;
+        let isFirstLogLoad = true;
+
+        const editableSettingIds = [
+            "getar_ms", "btn_ms", "btn_tap",
+            "led_wakeup", "buz_wakeup",
+            "led_standby", "buz_standby",
+            "led_wifi", "buz_wifi",
+            "led_rfid", "buz_rfid",
+            "led_ap", "buz_ap",
+            "led_oli", "buz_oli"
+        ];
 
         window.onload = function() {
             if (sessionStorage.getItem("isLoggedIn") === "true") {
                 showDashboard();
             }
-            ["getar_ms", "btn_ms", "btn_tap"].forEach(id => {
+            editableSettingIds.forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener("focus", () => { isEditingSens = true; });
@@ -290,7 +368,10 @@ const char index_html[] PROGMEM = R"rawliteral(
 
         function handleLogout() {
             sessionStorage.removeItem("isLoggedIn");
-            clearInterval(refreshInterval);
+            if (dataRefreshInterval) clearInterval(dataRefreshInterval);
+            if (logRefreshInterval) clearInterval(logRefreshInterval);
+            dataRefreshInterval = null;
+            logRefreshInterval = null;
             document.getElementById("dashboard-screen").style.display = "none";
             document.getElementById("login-screen").style.display = "flex";
             document.getElementById("login-user").value = "";
@@ -302,7 +383,56 @@ const char index_html[] PROGMEM = R"rawliteral(
             document.getElementById("login-screen").style.display = "none";
             document.getElementById("dashboard-screen").style.display = "block";
             fetchData(true);
-            refreshInterval = setInterval(() => fetchData(false), 3000);
+            fetchLogs();
+            if (dataRefreshInterval) clearInterval(dataRefreshInterval);
+            if (logRefreshInterval) clearInterval(logRefreshInterval);
+            dataRefreshInterval = setInterval(() => fetchData(false), 3000);
+            logRefreshInterval = setInterval(fetchLogs, 1500);
+        }
+
+        function togglePauseLog() {
+            isLogPaused = !isLogPaused;
+            const btn = document.getElementById("btn-pause-log");
+            if (btn) {
+                btn.innerText = isLogPaused ? "Lanjutkan" : "Pause";
+            }
+        }
+
+        function clearTerminalLog() {
+            const box = document.getElementById("term-box");
+            if (box) box.textContent = "";
+        }
+
+        function fetchLogs() {
+            if (isLogPaused) return;
+            const otaBtn = document.getElementById("ota-btn");
+            if (otaBtn && otaBtn.disabled) return;
+
+            fetch(`/logs?since=${logCursor}`)
+                .then(res => res.json())
+                .then(data => {
+                    const box = document.getElementById("term-box");
+                    if (!box) return;
+
+                    if (isFirstLogLoad) {
+                        box.textContent = "";
+                        isFirstLogLoad = false;
+                    }
+
+                    if (Array.isArray(data.lines) && data.lines.length > 0) {
+                        const nearBottom = (box.scrollTop + box.clientHeight) >= (box.scrollHeight - 24);
+                        const addition = data.lines.join("\n") + "\n";
+                        box.textContent += addition;
+                        if (nearBottom) {
+                            box.scrollTop = box.scrollHeight;
+                        }
+                    }
+
+                    if (typeof data.next === "number") {
+                        logCursor = data.next;
+                    }
+                })
+                .catch(err => console.error("Gagal ambil log:", err));
         }
 
         function simpanSensitivitas() {
@@ -329,55 +459,27 @@ const char index_html[] PROGMEM = R"rawliteral(
             });
         }
 
-        function fetchData(forceSyncSens) {
-            fetch('/getdata')
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('val-volt').innerText = data.tegangan + ' V';
+        function simpanProsesNotif() {
+            const statusEl = document.getElementById("proses-status");
+            const body = new URLSearchParams({
+                led_wakeup:  document.getElementById("led_wakeup").value,
+                buz_wakeup:  document.getElementById("buz_wakeup").value,
+                led_standby: document.getElementById("led_standby").value,
+                buz_standby: document.getElementById("buz_standby").value,
+                led_wifi:    document.getElementById("led_wifi").value,
+                buz_wifi:    document.getElementById("buz_wifi").value,
+                led_rfid:    document.getElementById("led_rfid").value,
+                buz_rfid:    document.getElementById("buz_rfid").value,
+                led_ap:      document.getElementById("led_ap").value,
+                buz_ap:      document.getElementById("buz_ap").value,
+                led_oli:     document.getElementById("led_oli").value,
+                buz_oli:     document.getElementById("buz_oli").value
+            });
 
-                    let totalMenit = data.total_menit;
-                    let jam = Math.floor(totalMenit / 60);
-                    let menit = totalMenit % 60;
-                    document.getElementById('val-oli').innerText = jam + 'j ' + menit + 'm';
-
-                    let warningEl = document.getElementById('oli-warning');
-                    if (totalMenit >= 12000) {
-                        warningEl.innerHTML = "<span style='color: #ef4444;'>⚠️ WAKTU GANTI OLI MESIN! (>200 Jam)</span>";
-                    } else {
-                        warningEl.innerHTML = "<span style='color: #22c55e;'>✔ Kondisi Oli Normal</span>";
-                    }
-
-                    if (forceSyncSens || !isEditingSens) {
-                        if (data.getar_ms !== undefined) document.getElementById('getar_ms').value = data.getar_ms;
-                        if (data.btn_ms !== undefined) document.getElementById('btn_ms').value = data.btn_ms;
-                        if (data.btn_tap !== undefined) document.getElementById('btn_tap').value = data.btn_tap;
-                    }
-
-                    let wifiHtml = '';
-                    if(data.wifis.length === 0) {
-                        wifiHtml = '<li>Belum ada WiFi terdaftar.</li>';
-                    } else {
-                        data.wifis.forEach(w => {
-                            wifiHtml += `<li><b>${w.ssid}</b><br><span class="badge">MAC: ${w.bssid}</span> <span class="badge">RSSI: ${w.rssi}dBm</span></li>`;
-                        });
-                    }
-                    document.getElementById('wifi-list').innerHTML = wifiHtml;
-
-                    let rfidHtml = '';
-                    if(data.rfids.length === 0) {
-                        rfidHtml = '<li>Belum ada kartu RFID terdaftar.</li>';
-                    } else {
-                        data.rfids.forEach((r, index) => {
-                            rfidHtml += `<li>Kartu #${index + 1}: <span class="badge">${r}</span></li>`;
-                        });
-                    }
-                    document.getElementById('rfid-list').innerHTML = rfidHtml;
-                })
-                .catch(err => console.error('Gagal mengambil data:', err));
-        }
-    </script>
-</body>
-</html>
-)rawliteral";
-
-#endif
+            fetch("/saveproses", {
+                method: "POST",
+                body: body
+            })
+            .then(res => {
+                if (res.ok) {
+                    statusEl.innerHTML = "<span style='color:#22c55e;'>✔ Setelan LED & Buzzer tersimpan!</span>"
