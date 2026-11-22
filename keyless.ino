@@ -45,7 +45,7 @@ const int BATAS_TOLERANSI_WIFI = 3;
 unsigned long waktuGetarMulai = 0;
 bool sedangMendeteksiGetar = false;
 bool siapBangunGetar = false;          
-const unsigned long DURASI_STABIL_GETAR = 150; 
+const unsigned long DURASI_STABIL_GETAR = 450; 
 
 unsigned long totalJamKerjaMenit = 0;  
 unsigned long waktuMulaiMesinNyala = 0;
@@ -61,10 +61,19 @@ const unsigned long TIMEOUT_AP_AUTO_OFF = 120000;
 
 int rfidTapCount = 0;
 unsigned long waktuRfidTapPertama = 0;
+
+// Variabel debounce tombol 3x tekan (saat aktif)
 int buttonTapCount = 0;
 unsigned long waktuButtonTapPertama = 0;
-bool lastButtonState = HIGH;
-unsigned long lastButtonDebounce = 0;
+bool lastButtonReading = HIGH;
+bool debouncedButtonState = HIGH;
+unsigned long lastButtonChangeTime = 0;
+const unsigned long DEBOUNCE_DELAY_BTN = 50;
+
+// Variabel debounce wake up tombol (saat standby)
+unsigned long waktuMulaiTekanWakeup = 0;
+bool sedangMenekanWakeup = false;
+const unsigned long DEBOUNCE_WAKEUP_BTN = 60;
 
 AsyncWebServer server(80);
 
@@ -81,7 +90,7 @@ void aktifkanWiFiAP() {
     waktuMulaiAP = millis();
     digitalWrite(PIN_LED_STATUS, HIGH);
     Serial.println("\n[AP ON-DEMAND] Wi-Fi AP Aktif!");
-    
+
     digitalWrite(PIN_BUZZER, HIGH); delay(100);
     digitalWrite(PIN_BUZZER, LOW);  delay(100);
     digitalWrite(PIN_BUZZER, HIGH); delay(100);
@@ -249,14 +258,45 @@ void setupWebServer() {
   server.begin();
 }
 
-// ==================== FUNGSI LAINNYA (SAMA SEPERTI SEBELUMNYA) ====================
-void bunyiWakeup() { digitalWrite(PIN_BUZZER, HIGH); delay(60); digitalWrite(PIN_BUZZER, LOW); }
+// ==================== FUNGSI BUZZER & STANDALONE ====================
+void bunyiWakeupTombol() {
+  digitalWrite(PIN_BUZZER, HIGH);
+  delay(60);
+  digitalWrite(PIN_BUZZER, LOW);
+}
+
+void bunyiWakeupGetar() {
+  for (int i = 0; i < 2; i++) {
+    digitalWrite(PIN_BUZZER, HIGH);
+    delay(60);
+    digitalWrite(PIN_BUZZER, LOW);
+    if (i == 0) delay(70);
+  }
+}
+
 void bunyiStandby() { for (int i = 0; i < 3; i++) { digitalWrite(PIN_BUZZER, HIGH); delay(50); digitalWrite(PIN_BUZZER, LOW); delay(50); } }
 void bunyiWifiTerhubung() { digitalWrite(PIN_BUZZER, HIGH); delay(80); digitalWrite(PIN_BUZZER, LOW); delay(80); digitalWrite(PIN_BUZZER, HIGH); delay(80); digitalWrite(PIN_BUZZER, LOW); }
 void bunyiWifiTerputus() { digitalWrite(PIN_BUZZER, HIGH); delay(400); digitalWrite(PIN_BUZZER, LOW); }
 void bunyiBuzzerBuka() { digitalWrite(PIN_BUZZER, HIGH); delay(80); digitalWrite(PIN_BUZZER, LOW); delay(80); digitalWrite(PIN_BUZZER, HIGH); delay(80); digitalWrite(PIN_BUZZER, LOW); }
 void bunyiBuzzerKunci() { digitalWrite(PIN_BUZZER, HIGH); delay(250); digitalWrite(PIN_BUZZER, LOW); }
 void bunyiPeringatanOli() { for (int i = 0; i < 4; i++) { digitalWrite(PIN_BUZZER, HIGH); delay(150); digitalWrite(PIN_BUZZER, LOW); delay(150); } }
+
+void keluarDariStandby() {
+  digitalWrite(PIN_LED_STATUS, HIGH);
+  berhentiTotalScan = false;
+  siapBangunGetar = false;
+  sedangMendeteksiGetar = false;
+  sedangMenekanWakeup = false;
+  sedangMencari = false;
+  statusTerdeteksiSebelumnya = false;
+  waktuMulaiHilang = millis();
+  hitungGagalScanWiFi = 0;
+  mfrc522.PCD_SoftPowerUp();
+  delay(50);
+  mfrc522.PCD_Init();
+  WiFi.mode(WIFI_STA);
+  delay(1000);
+}
 
 void runDetected() {
   digitalWrite(PIN_RELAY_KEYLESS, HIGH);  
@@ -396,6 +436,7 @@ void detectwifi() {
         berhentiTotalScan = true; 
         siapBangunGetar = false;
         sedangMendeteksiGetar = false;
+        sedangMenekanWakeup = false;
         sedangMencari = false;
         hitungGagalScanWiFi = 0;
         matikanWiFiAP();
@@ -428,73 +469,63 @@ void loop() {
     matikanWiFiAP();
   }
 
-  bool currentButtonState = digitalRead(PIN_BUTTON_WAKEUP);
-  if (currentButtonState == LOW && lastButtonState == HIGH && (millis() - lastButtonDebounce > 300)) {
-    lastButtonDebounce = millis();
-    if (statusTerdeteksiSebelumnya) {
-      unsigned long sekarang = millis();
-      if (sekarang - waktuButtonTapPertama > 2500) buttonTapCount = 0;
-      if (buttonTapCount == 0) waktuButtonTapPertama = sekarang;
-      buttonTapCount++;
-      if (buttonTapCount >= 3) {
-        buttonTapCount = 0;
-        aktifkanWiFiAP();
+  // Debounce tombol saat mode aktif (untuk 3x tekan -> aktifkan Config AP)
+  bool reading = digitalRead(PIN_BUTTON_WAKEUP);
+  if (reading != lastButtonReading) {
+    lastButtonChangeTime = millis();
+  }
+  if ((millis() - lastButtonChangeTime) > DEBOUNCE_DELAY_BTN) {
+    if (reading != debouncedButtonState) {
+      debouncedButtonState = reading;
+      if (!berhentiTotalScan && debouncedButtonState == LOW && statusTerdeteksiSebelumnya) {
+        unsigned long sekarang = millis();
+        if (sekarang - waktuButtonTapPertama > 2500) buttonTapCount = 0;
+        if (buttonTapCount == 0) waktuButtonTapPertama = sekarang;
+        buttonTapCount++;
+        if (buttonTapCount >= 3) {
+          buttonTapCount = 0;
+          waktuButtonTapPertama = 0;
+          aktifkanWiFiAP();
+        }
       }
     }
   }
-  lastButtonState = currentButtonState;
+  lastButtonReading = reading;
 
   if (berhentiTotalScan) {
-    if (digitalRead(PIN_BUTTON_WAKEUP) == LOW) { 
-      bunyiWakeup(); 
-      digitalWrite(PIN_LED_STATUS, HIGH); 
-      berhentiTotalScan = false;
-      siapBangunGetar = false;
-      sedangMencari = false;
-      statusTerdeteksiSebelumnya = false; 
-      waktuMulaiHilang = millis();
-      sedangMendeteksiGetar = false;
-      hitungGagalScanWiFi = 0;
-      mfrc522.PCD_SoftPowerUp();
-      delay(50);
-      mfrc522.PCD_Init(); 
-      WiFi.mode(WIFI_STA); 
-      delay(1000);
-      return;
-    }
-
-    if (!siapBangunGetar) {
-      if (digitalRead(PIN_SIMULASI_GETAR) == LOW) siapBangunGetar = true;
-      delay(100);
-      return;
-    }
-
-    if (digitalRead(PIN_SIMULASI_GETAR) == HIGH) {
-      if (!sedangMendeteksiGetar) {
-        waktuGetarMulai = millis();
-        sedangMendeteksiGetar = true;
-      } else {
-        if (millis() - waktuGetarMulai >= DURASI_STABIL_GETAR) {
-          bunyiWakeup(); 
-          digitalWrite(PIN_LED_STATUS, HIGH); 
-          berhentiTotalScan = false;
-          siapBangunGetar = false;
-          sedangMencari = false;
-          statusTerdeteksiSebelumnya = false; 
-          waktuMulaiHilang = millis();
-          sedangMendeteksiGetar = false;
-          hitungGagalScanWiFi = 0;
-          mfrc522.PCD_SoftPowerUp();
-          delay(50);
-          mfrc522.PCD_Init(); 
-          WiFi.mode(WIFI_STA); 
-          delay(1000); 
-        }
+    // 1. Wake up dari tombol (1 bip pendek)
+    if (digitalRead(PIN_BUTTON_WAKEUP) == LOW) {
+      if (!sedangMenekanWakeup) {
+        waktuMulaiTekanWakeup = millis();
+        sedangMenekanWakeup = true;
+      } else if (millis() - waktuMulaiTekanWakeup >= DEBOUNCE_WAKEUP_BTN) {
+        bunyiWakeupTombol();
+        keluarDariStandby();
+        return;
       }
     } else {
-      sedangMendeteksiGetar = false;
+      sedangMenekanWakeup = false;
     }
-    delay(50); 
+
+    // 2. Wake up dari getar (2 bip pendek)
+    if (!siapBangunGetar) {
+      if (digitalRead(PIN_SIMULASI_GETAR) == LOW) siapBangunGetar = true;
+    } else {
+      if (digitalRead(PIN_SIMULASI_GETAR) == HIGH) {
+        if (!sedangMendeteksiGetar) {
+          waktuGetarMulai = millis();
+          sedangMendeteksiGetar = true;
+        } else if (millis() - waktuGetarMulai >= DURASI_STABIL_GETAR) {
+          bunyiWakeupGetar();
+          keluarDariStandby();
+          return;
+        }
+      } else {
+        sedangMendeteksiGetar = false;
+      }
+    }
+
+    delay(20);
     return; 
   }
 
@@ -507,6 +538,7 @@ void loop() {
       berhentiTotalScan = true; 
       siapBangunGetar = false;
       sedangMendeteksiGetar = false;
+      sedangMenekanWakeup = false;
       hitungGagalScanWiFi = 0;
       matikanWiFiAP();
       WiFi.mode(WIFI_OFF);
