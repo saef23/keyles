@@ -55,9 +55,13 @@ bool sedangMendeteksiGetar = false;
 bool siapBangunGetar = false;
 
 // Sensitivitas tersimpan di Preferences (dapat diubah lewat Web Config)
-unsigned long durasiStabilGetarMs = 250; // ms (makin kecil makin responsif/sensitif)
-unsigned long debounceTombolMs    = 60;  // ms
+unsigned long durasiStabilGetarMs = 250; // 50 - 2000 ms (makin kecil makin sensitif)
+unsigned long debounceTombolMs    = 60;  // 20 - 500 ms
 int jumlahTapConfigAP             = 3;   // 2 - 5 kali tekan
+
+// Durasi buzzer & interval kedip LED tersimpan di Preferences
+unsigned long durasiBuzzerMs = 80;  // 30 - 1000 ms per ketukan buzzer
+unsigned long intervalLedMs  = 500; // 100 - 2000 ms interval toggle LED
 
 // ==================== SETELAN LED & BUZZER PER PROSES ====================
 bool ledWakeup  = true,  buzWakeup  = true;
@@ -113,6 +117,18 @@ void keluarDariStandby();
 void catetLog(const String &msg);
 void updateIndikatorLED();
 
+unsigned long clampDurasiBuzzer(unsigned long val) {
+  if (val < 30) return 30;
+  if (val > 1000) return 1000;
+  return val;
+}
+
+unsigned long clampIntervalLed(unsigned long val) {
+  if (val < 100) return 100;
+  if (val > 2000) return 2000;
+  return val;
+}
+
 String formatWaktuSingkat() {
   unsigned long detik = millis() / 1000;
   unsigned long jam = (detik / 3600) % 100;
@@ -156,14 +172,14 @@ bool parseBoolParam(AsyncWebServerRequest *request, const char *name, bool curre
 
 // ==================== HELPER NOTIFIKASI PER PROSES ====================
 void bunyiPulsa(bool aktif, unsigned long durasiMs) {
-  if (!aktif) return;
+  if (!aktif || sedangOTA) return;
   digitalWrite(PIN_BUZZER, HIGH);
   delay(durasiMs);
   digitalWrite(PIN_BUZZER, LOW);
 }
 
 void bunyiPola(bool aktif, int jumlah, unsigned long onMs, unsigned long offMs) {
-  if (!aktif) return;
+  if (!aktif || sedangOTA || jumlah <= 0) return;
   for (int i = 0; i < jumlah; i++) {
     digitalWrite(PIN_BUZZER, HIGH);
     delay(onMs);
@@ -173,7 +189,7 @@ void bunyiPola(bool aktif, int jumlah, unsigned long onMs, unsigned long offMs) 
 }
 
 void kedipEventLED(bool aktif, int jumlah, unsigned long onMs, unsigned long offMs) {
-  if (!aktif) return;
+  if (!aktif || jumlah <= 0) return;
   for (int i = 0; i < jumlah; i++) {
     digitalWrite(PIN_LED_STATUS, HIGH);
     delay(onMs);
@@ -184,15 +200,18 @@ void kedipEventLED(bool aktif, int jumlah, unsigned long onMs, unsigned long off
 
 void updateIndikatorLED() {
   unsigned long sekarang = millis();
+  unsigned long stepLed = clampIntervalLed(intervalLedMs);
 
-  // 4. Mode AP aktif -> kedip cepat (120 ms) jika ledAp aktif
+  // 4. Mode AP aktif -> kedip cepat (mengikuti intervalLedMs, minimal 120 ms)
   if (wifiApAktif) {
     if (!ledAp) {
       ledState = LOW;
       digitalWrite(PIN_LED_STATUS, LOW);
       return;
     }
-    if (sekarang - lastLedToggle >= 120) {
+    unsigned long apStep = (stepLed > 240) ? (stepLed / 2) : stepLed;
+    if (apStep < 120) apStep = 120;
+    if (sekarang - lastLedToggle >= apStep) {
       lastLedToggle = sekarang;
       ledState = !ledState;
       digitalWrite(PIN_LED_STATUS, ledState ? HIGH : LOW);
@@ -207,7 +226,8 @@ void updateIndikatorLED() {
       digitalWrite(PIN_LED_STATUS, LOW);
       return;
     }
-    if (sekarang - lastLedToggle >= 1500) {
+    unsigned long sbStep = stepLed * 2;
+    if (sekarang - lastLedToggle >= sbStep) {
       lastLedToggle = sekarang;
       ledState = !ledState;
       digitalWrite(PIN_LED_STATUS, ledState ? HIGH : LOW);
@@ -222,13 +242,13 @@ void updateIndikatorLED() {
     return;
   }
 
-  // 2. Saat wake up / belum terhubung (cari Wi-Fi) -> kedip pelan (700 ms) bila ledWakeup aktif
+  // 2. Saat wake up / belum terhubung (cari Wi-Fi) -> kedip sesuai intervalLedMs bila ledWakeup aktif
   if (!ledWakeup) {
     ledState = LOW;
     digitalWrite(PIN_LED_STATUS, LOW);
     return;
   }
-  if (sekarang - lastLedToggle >= 700) {
+  if (sekarang - lastLedToggle >= stepLed) {
     lastLedToggle = sekarang;
     ledState = !ledState;
     digitalWrite(PIN_LED_STATUS, ledState ? HIGH : LOW);
@@ -253,12 +273,14 @@ void aktifkanWiFiAP() {
     digitalWrite(PIN_LED_STATUS, ledState);
     catetLog("AP Config aktif (SSID: ESP32-Keyless-Config)");
 
-    kedipEventLED(ledAp, 2, 100, 100);
-    bunyiPola(buzAp, 2, 100, 100);
+    unsigned long jeda = clampDurasiBuzzer(durasiBuzzerMs);
+    kedipEventLED(ledAp, 2, jeda, jeda);
+    bunyiPola(buzAp, 2, jeda, jeda);
   }
 }
 
 void matikanWiFiAP() {
+  if (keynumber == 0 && rfidCount == 0) return;
   if (wifiApAktif && !sedangOTA) {
     WiFi.softAPdisconnect(true);
     if (!berhentiTotalScan) {
@@ -300,6 +322,9 @@ void loadConfigList() {
   if (jumlahTapConfigAP < 2) jumlahTapConfigAP = 2;
   if (jumlahTapConfigAP > 5) jumlahTapConfigAP = 5;
 
+  durasiBuzzerMs = clampDurasiBuzzer(preferences.getULong("buz_ms", 80));
+  intervalLedMs  = clampIntervalLed(preferences.getULong("led_ms", 500));
+
   ledWakeup  = preferences.getBool("led_wu", true);
   buzWakeup  = preferences.getBool("buz_wu", true);
   ledStandby = preferences.getBool("led_sb", true);
@@ -331,7 +356,12 @@ void simpanSensitivitas() {
 }
 
 void simpanSetelanProses() {
+  durasiBuzzerMs = clampDurasiBuzzer(durasiBuzzerMs);
+  intervalLedMs  = clampIntervalLed(intervalLedMs);
+
   preferences.begin("wifi_keys", false);
+  preferences.putULong("buz_ms", durasiBuzzerMs);
+  preferences.putULong("led_ms", intervalLedMs);
   preferences.putBool("led_wu", ledWakeup);
   preferences.putBool("buz_wu", buzWakeup);
   preferences.putBool("led_sb", ledStandby);
@@ -376,6 +406,8 @@ void setupWebServer() {
                   ",\"getar_ms\":" + String(durasiStabilGetarMs) +
                   ",\"btn_ms\":" + String(debounceTombolMs) +
                   ",\"btn_tap\":" + String(jumlahTapConfigAP) +
+                  ",\"buz_ms\":" + String(durasiBuzzerMs) +
+                  ",\"led_ms\":" + String(intervalLedMs) +
                   ",\"led_wakeup\":" + String(ledWakeup ? 1 : 0) +
                   ",\"buz_wakeup\":" + String(buzWakeup ? 1 : 0) +
                   ",\"led_standby\":" + String(ledStandby ? 1 : 0) +
@@ -450,6 +482,13 @@ void setupWebServer() {
   });
 
   server.on("/saveproses", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (request->hasParam("buz_ms", true)) {
+      durasiBuzzerMs = clampDurasiBuzzer(request->getParam("buz_ms", true)->value().toInt());
+    }
+    if (request->hasParam("led_ms", true)) {
+      intervalLedMs = clampIntervalLed(request->getParam("led_ms", true)->value().toInt());
+    }
+
     ledWakeup  = parseBoolParam(request, "led_wakeup",  ledWakeup);
     buzWakeup  = parseBoolParam(request, "buz_wakeup",  buzWakeup);
     ledStandby = parseBoolParam(request, "led_standby", ledStandby);
@@ -464,8 +503,9 @@ void setupWebServer() {
     buzOli     = parseBoolParam(request, "buz_oli",     buzOli);
 
     simpanSetelanProses();
+    lastLedToggle = millis();
     updateIndikatorLED();
-    catetLog("Setelan LED & Buzzer per proses diperbarui");
+    catetLog("Setelan LED & Buzzer disimpan (buz=" + String(durasiBuzzerMs) + "ms, led=" + String(intervalLedMs) + "ms)");
     request->send(200, "text/plain", "OK");
   });
 
@@ -527,57 +567,4 @@ void setupWebServer() {
     ESP.restart();
   });
 
-  server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *request){
-    catetLog("Restart ESP32 diminta dari web");
-    request->send(200, "text/html", "<h3>ESP32 Memulai ulang...</h3>");
-    delay(1000);
-    ESP.restart();
-  });
-
-  server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request){
-    bool updateSuccess = !Update.hasError() && Update.isFinished();
-    catetLog(updateSuccess ? "OTA berhasil, restart..." : "OTA gagal!");
-    AsyncWebServerResponse *response = request->beginResponse(200, "text/html", updateSuccess ?
-      "<h3>Update Berhasil! Restart...</h3>" : "<h3>Gagal Update! <a href='/'>Kembali</a></h3>");
-    response->addHeader("Connection", "close");
-    request->send(response);
-    sedangOTA = false;
-    if (updateSuccess) {
-      delay(1000);
-      ESP.restart();
-    }
-  }, [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final){
-    if (!index) {
-      sedangOTA = true;
-      catetLog("OTA mulai: " + filename);
-      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-        Update.printError(Serial);
-        catetLog("OTA Update.begin gagal");
-      }
-    }
-    if (len && Update.isRunning()) {
-      if (Update.write(data, len) != len) {
-        Update.printError(Serial);
-      }
-    }
-    if (final) {
-      if (Update.end(true)) {
-        catetLog("OTA selesai & terverifikasi");
-      } else {
-        Update.printError(Serial);
-        catetLog("OTA Update.end gagal");
-      }
-    }
-  });
-
-  server.begin();
-}
-
-// ==================== FUNGSI BUZZER, LED & MODE ====================
-void bunyiWakeupTombol() {
-  kedipEventLED(ledWakeup, 1, 60, 0);
-  bunyiPulsa(buzWakeup, 60);
-}
-
-void bunyiWakeupGetar() {
-  kedipEventLED(ledWakeup, 2, 60, 70)
+  
