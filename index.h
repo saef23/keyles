@@ -102,6 +102,17 @@ const char index_html[] PROGMEM = R"rawliteral(
             box-sizing: border-box;
             font-size: 0.95rem;
         }
+        .dur-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 6px;
+        }
+        .dur-grid input {
+            margin-top: 3px;
+            padding: 8px;
+            font-size: 0.9rem;
+        }
         .proc-grid select {
             margin-top: 0;
             padding: 7px 8px;
@@ -233,10 +244,21 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
 
             <div class="card">
-                <h3>LED & Buzzer Per Proses</h3>
-                <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0;">Atur nyala lampu LED dan bunyi buzzer di setiap kondisi.</p>
+                <h3>Durasi & LED / Buzzer Per Proses</h3>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0;">Atur durasi bunyi/kedip serta nyala ON/OFF di setiap proses.</p>
 
-                <div class="proc-grid" style="display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:8px; align-items:center; margin-top:10px; font-size:0.85rem;">
+                <div class="dur-grid">
+                    <div>
+                        <label>Durasi Buzzer (30-1000 ms):</label>
+                        <input type="number" id="buz_ms" min="30" max="1000" step="10" value="80">
+                    </div>
+                    <div>
+                        <label>Interval LED (100-2000 ms):</label>
+                        <input type="number" id="led_ms" min="100" max="2000" step="50" value="500">
+                    </div>
+                </div>
+
+                <div class="proc-grid" style="display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:8px; align-items:center; margin-top:14px; font-size:0.85rem;">
                     <strong>Proses</strong>
                     <strong style="text-align:center;">LED</strong>
                     <strong style="text-align:center;">Buzzer</strong>
@@ -266,7 +288,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <select id="buz_oli"><option value="1">ON</option><option value="0">OFF</option></select>
                 </div>
 
-                <button type="button" onclick="simpanProsesNotif()">Simpan LED & Buzzer</button>
+                <button type="button" onclick="simpanProsesNotif()">Simpan Durasi & Notifikasi</button>
                 <div id="proses-status" class="status-msg"></div>
             </div>
 
@@ -322,6 +344,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 
         const editableSettingIds = [
             "getar_ms", "btn_ms", "btn_tap",
+            "buz_ms", "led_ms",
             "led_wakeup", "buz_wakeup",
             "led_standby", "buz_standby",
             "led_wifi", "buz_wifi",
@@ -462,24 +485,8 @@ const char index_html[] PROGMEM = R"rawliteral(
         function simpanProsesNotif() {
             const statusEl = document.getElementById("proses-status");
             const body = new URLSearchParams({
+                buz_ms:      document.getElementById("buz_ms").value,
+                led_ms:      document.getElementById("led_ms").value,
                 led_wakeup:  document.getElementById("led_wakeup").value,
                 buz_wakeup:  document.getElementById("buz_wakeup").value,
-                led_standby: document.getElementById("led_standby").value,
-                buz_standby: document.getElementById("buz_standby").value,
-                led_wifi:    document.getElementById("led_wifi").value,
-                buz_wifi:    document.getElementById("buz_wifi").value,
-                led_rfid:    document.getElementById("led_rfid").value,
-                buz_rfid:    document.getElementById("buz_rfid").value,
-                led_ap:      document.getElementById("led_ap").value,
-                buz_ap:      document.getElementById("buz_ap").value,
-                led_oli:     document.getElementById("led_oli").value,
-                buz_oli:     document.getElementById("buz_oli").value
-            });
-
-            fetch("/saveproses", {
-                method: "POST",
-                body: body
-            })
-            .then(res => {
-                if (res.ok) {
-                    statusEl.innerHTML = "<span style='color:#22c55e;'>✔ Setelan LED & Buzzer tersimpan!</span>"
+                led_standby: document.getEle
