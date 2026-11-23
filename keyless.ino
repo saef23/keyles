@@ -566,4 +566,489 @@ void setupWebServer() {
     preferences.clear();
     preferences.end();
     catetLog("Factory reset konfigurasi, restart ESP32...");
-    request->send(200, "text/html", "<h3>Data Dihapus
+    request->send(200, "text/html", "<h3>Data Dihapus! Restart ESP32...</h3>");
+    delay(1000);
+    ESP.restart();
+  });
+
+  server.on("/restart", HTTP_GET, [](AsyncWebServerRequest *request){
+    catetLog("Restart ESP32 diminta dari web");
+    request->send(200, "text/html", "<h3>ESP32 Memulai ulang...</h3>");
+    delay(1000);
+    ESP.restart();
+  });
+
+  server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request){
+    bool updateSuccess = !Update.hasError() && Update.isFinished();
+    catetLog(updateSuccess ? "OTA berhasil, restart..." : "OTA gagal!");
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/html", updateSuccess ?
+      "<h3>Update Berhasil! Restart...</h3>" : "<h3>Gagal Update! <a href='/'>Kembali</a></h3>");
+    response->addHeader("Connection", "close");
+    request->send(response);
+    sedangOTA = false;
+    if (updateSuccess) {
+      delay(1000);
+      ESP.restart();
+    }
+  }, [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final){
+    if (!index) {
+      sedangOTA = true;
+      catetLog("OTA mulai: " + filename);
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+        catetLog("OTA Update.begin gagal");
+      }
+    }
+    if (len && Update.isRunning()) {
+      if (Update.write(data, len) != len) {
+        Update.printError(Serial);
+      }
+    }
+    if (final) {
+      if (Update.end(true)) {
+        catetLog("OTA selesai & terverifikasi");
+      } else {
+        Update.printError(Serial);
+        catetLog("OTA Update.end gagal");
+      }
+    }
+  });
+
+  server.begin();
+}
+
+// ==================== FUNGSI BUZZER, LED & MODE ====================
+void bunyiWakeupTombol() {
+  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
+  kedipEventLED(ledWakeup, 1, d, 0);
+  bunyiPulsa(buzWakeup, d);
+}
+
+void bunyiWakeupGetar() {
+  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
+  unsigned long gap = (d < 80) ? 70 : d;
+  kedipEventLED(ledWakeup, 2, d, gap);
+  bunyiPola(buzWakeup, 2, d, gap);
+}
+
+void bunyiStandby() {
+  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
+  kedipEventLED(ledStandby, 2, d, d);
+  bunyiPola(buzStandby, 3, d, d);
+}
+
+void bunyiWifiTerhubung() {
+  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
+  kedipEventLED(ledWifi, 2, d, d);
+  bunyiPola(buzWifi, 2, d, d);
+}
+
+void bunyiWifiTerputus() {
+  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
+  unsigned long panjang = d * 3;
+  if (panjang > 1000) panjang = 1000;
+  kedipEventLED(ledWifi, 1, d, 0);
+  bunyiPulsa(buzWifi, panjang);
+}
+
+void bunyiBuzzerBuka() {
+  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
+  kedipEventLED(ledRfid, 2, d, d);
+  bunyiPola(buzRfid, 2, d, d);
+}
+
+void bunyiBuzzerKunci() {
+  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
+  unsigned long panjang = d * 2;
+  if (panjang > 1000) panjang = 1000;
+  kedipEventLED(ledRfid, 1, d, 0);
+  bunyiPulsa(buzRfid, panjang);
+}
+
+void bunyiPeringatanOli() {
+  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
+  kedipEventLED(ledOli, 4, d, d);
+  bunyiPola(buzOli, 4, d, d);
+}
+
+void masukModeStandby() {
+  if (sedangOTA) return;
+
+  // Jika belum ada Wi-Fi maupun RFID terdaftar, Config AP wajib dipertahankan
+  if (belumAdaKunciTerdaftar()) {
+    aktifkanWiFiAP();
+    return;
+  }
+
+  sedangDiModeWakeup = false;
+  sedangMenungguStandbyRFID = false;
+  berhentiTotalScan = true;
+  siapBangunGetar = false;
+  sedangMendeteksiGetar = false;
+  sedangMenekanWakeup = false;
+  sedangMencari = false;
+  statusTerdeteksiSebelumnya = false;
+  rfidKontakState = false;
+  hitungGagalScanWiFi = 0;
+  hitungScanWakeup = 0;
+
+  digitalWrite(PIN_RELAY_KEYLESS, LOW);
+  matikanWiFiAP();
+  WiFi.mode(WIFI_OFF);
+  mfrc522.PCD_SoftPowerDown();
+
+  ledState = LOW;
+  digitalWrite(PIN_LED_STATUS, LOW);
+  catetLog("Masuk STANDBY (Wi-Fi scan & RFID OFF)");
+  bunyiStandby();
+}
+
+void masukModeWakeup() {
+  if (belumAdaKunciTerdaftar()) {
+    aktifkanWiFiAP();
+    return;
+  }
+
+  berhentiTotalScan = false;
+  sedangMenungguStandbyRFID = false;
+  siapBangunGetar = false;
+  sedangMendeteksiGetar = false;
+  sedangMenekanWakeup = false;
+  statusTerdeteksiSebelumnya = false;
+  rfidKontakState = false;
+  hitungGagalScanWiFi = 0;
+  hitungScanWakeup = 0;
+  sedangMencari = false;
+  waktuMulaiHilang = 0;
+
+  sedangDiModeWakeup = true;
+  waktuMasukModeWakeup = millis();
+
+  lastLedToggle = millis();
+  ledState = ledWakeup ? HIGH : LOW;
+  digitalWrite(PIN_LED_STATUS, ledState);
+
+  mfrc522.PCD_SoftPowerUp();
+  delay(30);
+  mfrc522.PCD_Init();
+  WiFi.mode(WIFI_STA);
+  catetLog("Masuk WAKE UP (maks 3x scan Wi-Fi)");
+}
+
+void keluarDariStandby() {
+  masukModeWakeup();
+  delay(500);
+}
+
+void runDetected() {
+  sedangDiModeWakeup = false;
+  hitungScanWakeup = 0;
+  digitalWrite(PIN_RELAY_KEYLESS, HIGH);
+  digitalWrite(PIN_LED_STATUS, LOW);
+
+  if (!statusTerdeteksiSebelumnya) {
+    catetLog("Wi-Fi cocok -> Relay ON");
+    bunyiWifiTerhubung();
+    statusTerdeteksiSebelumnya = true;
+    waktuMulaiMesinNyala = millis();
+    if (totalJamKerjaMenit >= INTERVAL_GANTI_OLI_MENIT && !peringatanOliSudahBunyi) {
+      catetLog("Peringatan ganti oli (>= 200 jam)");
+      bunyiPeringatanOli();
+      peringatanOliSudahBunyi = true;
+    }
+  } else {
+    if (millis() - waktuMulaiMesinNyala >= 60000) {
+      totalJamKerjaMenit++;
+      waktuMulaiMesinNyala = millis();
+    }
+  }
+}
+
+void runNotDetected() {
+  digitalWrite(PIN_RELAY_KEYLESS, LOW);
+  if (statusTerdeteksiSebelumnya) {
+    catetLog("Wi-Fi terputus -> Relay OFF, masuk WAKE UP");
+    bunyiWifiTerputus();
+    statusTerdeteksiSebelumnya = false;
+    simpanJamOli();
+    matikanWiFiAP();
+    masukModeWakeup();
+  }
+}
+
+bool cekRFID() {
+  if (berhentiTotalScan) return false;
+
+  if (!mfrc522.PICC_IsNewCardPresent() || !mfrc522.PICC_ReadCardSerial()) return false;
+
+  String content = "";
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+    content.concat(String(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " "));
+    content.concat(String(mfrc522.uid.uidByte[i], HEX));
+  }
+  content.toUpperCase();
+  String scannedUID = content.substring(1);
+
+  if (modeSettingWeb) {
+    if (rfidCount < 5) {
+      rfidKeyUID[rfidCount] = scannedUID;
+      rfidCount++;
+      rfidAktif = true;
+      preferences.begin("wifi_keys", false);
+      preferences.putString(("rfid_" + String(rfidCount - 1)).c_str(), scannedUID);
+      preferences.putInt("rfid_count", rfidCount);
+      preferences.end();
+      catetLog("Kartu RFID baru tersimpan: " + scannedUID);
+      unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
+      kedipEventLED(ledRfid, 1, d * 2, 0);
+      bunyiPulsa(buzRfid, d * 2);
+    }
+    modeSettingWeb = false;
+    mfrc522.PICC_HaltA();
+    return true;
+  }
+
+  bool kartuCocok = false;
+  for (int i = 0; i < rfidCount; i++) {
+    if (scannedUID == rfidKeyUID[i]) {
+      kartuCocok = true;
+      break;
+    }
+  }
+
+  if (rfidAktif && kartuCocok) {
+    catetLog("RFID UID " + scannedUID + " cocok");
+    if (rfidKontakState) {
+      rfidKontakState = false;
+      digitalWrite(PIN_RELAY_KEYLESS, LOW);
+      catetLog("Kontak RFID dimatikan");
+      bunyiBuzzerKunci();
+      matikanWiFiAP();
+      masukModeWakeup();
+      mfrc522.PICC_HaltA();
+      return true;
+    }
+
+    if (statusTerdeteksiSebelumnya) {
+      unsigned long sekarang = millis();
+      if (sekarang - waktuRfidTapPertama > 2500) rfidTapCount = 0;
+      if (rfidTapCount == 0) waktuRfidTapPertama = sekarang;
+      rfidTapCount++;
+      if (rfidTapCount >= 3) {
+        rfidTapCount = 0;
+        aktifkanWiFiAP();
+        mfrc522.PICC_HaltA();
+        return true;
+      }
+    }
+
+    rfidKontakState = true;
+    sedangDiModeWakeup = false;
+    hitungScanWakeup = 0;
+    digitalWrite(PIN_RELAY_KEYLESS, HIGH);
+    digitalWrite(PIN_LED_STATUS, LOW);
+    catetLog("Kontak RFID aktif -> Relay ON");
+    bunyiBuzzerBuka();
+    waktuMulaiMesinNyala = millis();
+    berhentiTotalScan = false;
+    sedangMenungguStandbyRFID = false;
+    siapBangunGetar = false;
+    hitungGagalScanWiFi = 0;
+    waktuMulaiHilang = millis();
+    statusTerdeteksiSebelumnya = true;
+
+    mfrc522.PICC_HaltA();
+    return true;
+  } else {
+    catetLog("RFID UID " + scannedUID + " tidak dikenal");
+    unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
+    kedipEventLED(ledRfid, 2, d, d);
+    bunyiPola(buzRfid, 2, d, d);
+  }
+
+  mfrc522.PICC_HaltA();
+  return false;
+}
+
+void detectwifi() {
+  if (berhentiTotalScan || rfidKontakState || sedangMenungguStandbyRFID || sedangOTA) return;
+
+  if (belumAdaKunciTerdaftar()) {
+    aktifkanWiFiAP();
+    return;
+  }
+
+  updateIndikatorLED();
+  int n = WiFi.scanNetworks();
+  bool found = false;
+
+  for (int i = 0; i < n; ++i) {
+    String scannedSSID = WiFi.SSID(i);
+    int scannedRSSI = WiFi.RSSI(i);
+
+    for (int j = 0; j < keynumber; ++j) {
+      if (scannedSSID == SSIDkey[j] && scannedRSSI >= RSSItresh[j]) {
+        found = true;
+        break;
+      }
+    }
+    if (found) break;
+  }
+  WiFi.scanDelete();
+
+  if (found) {
+    if (sedangDiModeWakeup) {
+      catetLog("Scan Wi-Fi #" + String(hitungScanWakeup + 1) + " -> COCOK (SSID & RSSI)");
+    }
+    sedangDiModeWakeup = false;
+    hitungScanWakeup = 0;
+    hitungGagalScanWiFi = 0;
+    waktuMulaiHilang = 0;
+    sedangMencari = false;
+    runDetected();
+  } else {
+    if (sedangDiModeWakeup) {
+      hitungScanWakeup++;
+      catetLog("Scan Wi-Fi wake-up #" + String(hitungScanWakeup) + "/" + String(MAKS_SCAN_WAKEUP) + " -> tidak ada");
+      if (hitungScanWakeup >= MAKS_SCAN_WAKEUP && !rfidKontakState && !wifiApAktif && !modeSettingWeb && !sedangOTA) {
+        catetLog("3x scan wake-up selesai tanpa hasil -> STANDBY");
+        masukModeStandby();
+        return;
+      }
+    } else {
+      hitungGagalScanWiFi++;
+      if (hitungGagalScanWiFi >= BATAS_TOLERANSI_WIFI) {
+        runNotDetected();
+      }
+    }
+  }
+
+  updateIndikatorLED();
+  delay(500);
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(100);
+
+  SPI.begin();
+  mfrc522.PCD_Init();
+
+  pinMode(PIN_RELAY_KEYLESS, OUTPUT); digitalWrite(PIN_RELAY_KEYLESS, LOW);
+  pinMode(PIN_BUZZER, OUTPUT);        digitalWrite(PIN_BUZZER, LOW);
+  pinMode(PIN_SIMULASI_GETAR, INPUT_PULLDOWN);
+  pinMode(PIN_BUTTON_WAKEUP, INPUT_PULLUP);
+  pinMode(PIN_VOLT_SENSOR, INPUT);
+  pinMode(PIN_LED_STATUS, OUTPUT);    digitalWrite(PIN_LED_STATUS, LOW);
+
+  loadConfigList();
+  setupWebServer();
+  catetLog("Sistem boot selesai");
+
+  if (belumAdaKunciTerdaftar()) {
+    aktifkanWiFiAP();
+  } else {
+    masukModeWakeup();
+  }
+}
+
+void loop() {
+  unsigned long sekarang = millis();
+
+  if (sedangOTA) {
+    updateIndikatorLED();
+    return;
+  }
+
+  if (belumAdaKunciTerdaftar()) {
+    aktifkanWiFiAP();
+  } else if (wifiApAktif && (sekarang - waktuMulaiAP >= TIMEOUT_AP_AUTO_OFF)) {
+    matikanWiFiAP();
+  }
+
+  updateIndikatorLED();
+
+  // ==================== MODE STANDBY (SCAN WIFI & RFID OFF) ====================
+  if (berhentiTotalScan) {
+    if (WiFi.getMode() != WIFI_OFF && !wifiApAktif) {
+      WiFi.mode(WIFI_OFF);
+    }
+
+    if (digitalRead(PIN_BUTTON_WAKEUP) == LOW) {
+      if (!sedangMenekanWakeup) {
+        waktuMulaiTekanWakeup = sekarang;
+        sedangMenekanWakeup = true;
+      } else if (sekarang - waktuMulaiTekanWakeup >= debounceTombolMs) {
+        sedangMenekanWakeup = false;
+        catetLog("Wake-up dari tombol");
+        bunyiWakeupTombol();
+        keluarDariStandby();
+        return;
+      }
+    } else {
+      sedangMenekanWakeup = false;
+    }
+
+    if (digitalRead(PIN_SIMULASI_GETAR) == HIGH) {
+      if (!sedangMendeteksiGetar) {
+        waktuGetarMulai = sekarang;
+        sedangMendeteksiGetar = true;
+      } else if (sekarang - waktuGetarMulai >= durasiStabilGetarMs) {
+        sedangMendeteksiGetar = false;
+        catetLog("Wake-up dari sensor getar");
+        bunyiWakeupGetar();
+        keluarDariStandby();
+        return;
+      }
+    } else {
+      sedangMendeteksiGetar = false;
+    }
+
+    return;
+  }
+
+  // ==================== MODE AKTIF / WAKE UP (WIFI & RFID ON) ====================
+  if (sedangDiModeWakeup && !statusTerdeteksiSebelumnya && !rfidKontakState && !wifiApAktif && !modeSettingWeb) {
+    if (sekarang - waktuMasukModeWakeup >= TIMEOUT_WAKEUP_KE_STANDBY) {
+      catetLog("Timeout mode wake-up -> STANDBY");
+      masukModeStandby();
+      return;
+    }
+  }
+
+  bool reading = digitalRead(PIN_BUTTON_WAKEUP);
+  if (reading != lastButtonReading) {
+    lastButtonChangeTime = sekarang;
+  }
+  if ((sekarang - lastButtonChangeTime) > debounceTombolMs) {
+    if (reading != debouncedButtonState) {
+      debouncedButtonState = reading;
+      if (debouncedButtonState == LOW) {
+        if (sekarang - waktuButtonTapPertama > 2500) buttonTapCount = 0;
+        if (buttonTapCount == 0) waktuButtonTapPertama = sekarang;
+        buttonTapCount++;
+        if (buttonTapCount >= jumlahTapConfigAP) {
+          buttonTapCount = 0;
+          waktuButtonTapPertama = 0;
+          aktifkanWiFiAP();
+        }
+      }
+    }
+  }
+  lastButtonReading = reading;
+
+  bool rfidTerbaca = cekRFID();
+  if (rfidTerbaca && rfidKontakState) {
+    sedangDiModeWakeup = false;
+    return;
+  }
+
+  // Selama belum ada Wi-Fi & RFID terdaftar dan AP aktif, pertahankan AP tanpa scan berulang
+  if (wifiApAktif && belumAdaKunciTerdaftar()) {
+    return;
+  }
+
+  if (!rfidKontakState && !modeSettingWeb) {
+    detectwifi();
+  }
+}
