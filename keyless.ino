@@ -51,6 +51,8 @@ int hitungGagalScanWiFi = 0;
 const int BATAS_TOLERANSI_WIFI = 3;
 
 unsigned long waktuGetarMulai = 0;
+unsigned long waktuGetarTerakhir = 0;
+const unsigned long JEDA_TOLERANSI_GETAR_MS = 80;
 bool sedangMendeteksiGetar = false;
 bool siapBangunGetar = false;
 
@@ -751,6 +753,7 @@ void masukModeStandby() {
   berhentiTotalScan = true;
   siapBangunGetar = false;
   sedangMendeteksiGetar = false;
+  waktuGetarTerakhir = 0;
   sedangMenekanWakeup = false;
   sedangMencari = false;
   statusTerdeteksiSebelumnya = false;
@@ -779,6 +782,7 @@ void masukModeWakeup() {
   sedangMenungguStandbyRFID = false;
   siapBangunGetar = false;
   sedangMendeteksiGetar = false;
+  waktuGetarTerakhir = 0;
   sedangMenekanWakeup = false;
   statusTerdeteksiSebelumnya = false;
   rfidKontakState = false;
@@ -1061,15 +1065,20 @@ void loop() {
       if (!sedangMendeteksiGetar) {
         waktuGetarMulai = sekarang;
         sedangMendeteksiGetar = true;
-      } else if (sekarang - waktuGetarMulai >= durasiStabilGetarMs) {
+      }
+      waktuGetarTerakhir = sekarang;
+
+      if (sekarang - waktuGetarMulai >= durasiStabilGetarMs) {
         sedangMendeteksiGetar = false;
+        waktuGetarTerakhir = 0;
         catetLog("Wake-up dari sensor getar");
         bunyiWakeupGetar();
         keluarDariStandby();
         return;
       }
-    } else {
+    } else if (sedangMendeteksiGetar && (sekarang - waktuGetarTerakhir > JEDA_TOLERANSI_GETAR_MS)) {
       sedangMendeteksiGetar = false;
+      waktuGetarTerakhir = 0;
     }
 
     return;
