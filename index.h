@@ -489,4 +489,165 @@ const char index_html[] PROGMEM = R"rawliteral(
                 led_ms:      document.getElementById("led_ms").value,
                 led_wakeup:  document.getElementById("led_wakeup").value,
                 buz_wakeup:  document.getElementById("buz_wakeup").value,
-                led_standby: document.getEle
+                led_standby: document.getElementById("led_standby").value,
+                buz_standby: document.getElementById("buz_standby").value,
+                led_wifi:    document.getElementById("led_wifi").value,
+                buz_wifi:    document.getElementById("buz_wifi").value,
+                led_rfid:    document.getElementById("led_rfid").value,
+                buz_rfid:    document.getElementById("buz_rfid").value,
+                led_ap:      document.getElementById("led_ap").value,
+                buz_ap:      document.getElementById("buz_ap").value,
+                led_oli:     document.getElementById("led_oli").value,
+                buz_oli:     document.getElementById("buz_oli").value
+            });
+
+            fetch("/saveproses", {
+                method: "POST",
+                body: body
+            })
+            .then(res => {
+                if (res.ok) {
+                    statusEl.innerHTML = "<span style='color:#22c55e;'>✔ Durasi & Notifikasi tersimpan!</span>";
+                } else {
+                    statusEl.innerHTML = "<span style='color:#ef4444;'>✖ Gagal menyimpan setelan proses.</span>";
+                }
+            })
+            .catch(() => {
+                statusEl.innerHTML = "<span style='color:#ef4444;'>✖ Kesalahan koneksi.</span>";
+            });
+        }
+
+        function uploadOTA(event) {
+            event.preventDefault();
+            const fileInput = document.getElementById("ota-file");
+            const statusEl = document.getElementById("ota-status");
+            const btnEl = document.getElementById("ota-btn");
+
+            if (!fileInput.files || fileInput.files.length === 0) {
+                statusEl.innerHTML = "<span style='color:#ef4444;'>✖ Pilih file .bin terlebih dahulu!</span>";
+                return;
+            }
+
+            const file = fileInput.files[0];
+            if (!file.name.toLowerCase().endsWith(".bin")) {
+                statusEl.innerHTML = "<span style='color:#ef4444;'>✖ File harus berekstensi .bin</span>";
+                return;
+            }
+
+            if (!confirm(`Upload firmware "${file.name}" (${(file.size / 1024).toFixed(1)} KB)? ESP32 akan restart otomatis setelah selesai.`)) {
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append("update", file, file.name);
+
+            const xhr = new XMLHttpRequest();
+            xhr.open("POST", "/update", true);
+            btnEl.disabled = true;
+            statusEl.innerHTML = "<span style='color:#38bdf8;'>⬆ Mengupload firmware: 0%...</span>";
+
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) {
+                    const pct = Math.round((e.loaded / e.total) * 100);
+                    statusEl.innerHTML = `<span style='color:#38bdf8;'>⬆ Mengupload firmware: ${pct}%...</span>`;
+                }
+            };
+
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    statusEl.innerHTML = "<span style='color:#22c55e;'>✔ Update berhasil! ESP32 sedang restart...</span>";
+                    setTimeout(() => {
+                        fileInput.value = "";
+                        btnEl.disabled = false;
+                    }, 4000);
+                } else {
+                    statusEl.innerHTML = "<span style='color:#ef4444;'>✖ Gagal update firmware (HTTP " + xhr.status + ").</span>";
+                    btnEl.disabled = false;
+                }
+            };
+
+            xhr.onerror = function() {
+                statusEl.innerHTML = "<span style='color:#ef4444;'>✖ Koneksi terputus saat upload OTA.</span>";
+                btnEl.disabled = false;
+            };
+
+            xhr.send(formData);
+        }
+
+        function syncSelectVal(id, val) {
+            const el = document.getElementById(id);
+            if (el && val !== undefined) {
+                el.value = String(val ? 1 : 0);
+            }
+        }
+
+        function fetchData(forceSyncSens) {
+            const otaBtn = document.getElementById("ota-btn");
+            if (otaBtn && otaBtn.disabled) return;
+
+            fetch('/getdata')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('val-volt').innerText = data.tegangan + ' V';
+
+                    let totalMenit = data.total_menit;
+                    let jam = Math.floor(totalMenit / 60);
+                    let menit = totalMenit % 60;
+                    document.getElementById('val-oli').innerText = jam + 'j ' + menit + 'm';
+
+                    let warningEl = document.getElementById('oli-warning');
+                    if (totalMenit >= 12000) {
+                        warningEl.innerHTML = "<span style='color: #ef4444;'>⚠️ WAKTU GANTI OLI MESIN! (>200 Jam)</span>";
+                    } else {
+                        warningEl.innerHTML = "<span style='color: #22c55e;'>✔ Kondisi Oli Normal</span>";
+                    }
+
+                    if (forceSyncSens || !isEditingSens) {
+                        if (data.getar_ms !== undefined) document.getElementById('getar_ms').value = data.getar_ms;
+                        if (data.btn_ms !== undefined) document.getElementById('btn_ms').value = data.btn_ms;
+                        if (data.btn_tap !== undefined) document.getElementById('btn_tap').value = data.btn_tap;
+                        if (data.buz_ms !== undefined) document.getElementById('buz_ms').value = data.buz_ms;
+                        if (data.led_ms !== undefined) document.getElementById('led_ms').value = data.led_ms;
+
+                        syncSelectVal('led_wakeup',  data.led_wakeup);
+                        syncSelectVal('buz_wakeup',  data.buz_wakeup);
+                        syncSelectVal('led_standby', data.led_standby);
+                        syncSelectVal('buz_standby', data.buz_standby);
+                        syncSelectVal('led_wifi',    data.led_wifi);
+                        syncSelectVal('buz_wifi',    data.buz_wifi);
+                        syncSelectVal('led_rfid',    data.led_rfid);
+                        syncSelectVal('buz_rfid',    data.buz_rfid);
+                        syncSelectVal('led_ap',      data.led_ap);
+                        syncSelectVal('buz_ap',      data.buz_ap);
+                        syncSelectVal('led_oli',     data.led_oli);
+                        syncSelectVal('buz_oli',     data.buz_oli);
+                    }
+
+                    let wifiHtml = '';
+                    if(data.wifis.length === 0) {
+                        wifiHtml = '<li>Belum ada WiFi terdaftar.</li>';
+                    } else {
+                        data.wifis.forEach(w => {
+                            wifiHtml += `<li><b>${w.ssid}</b> <span class="badge">Min RSSI: ${w.rssi} dBm</span></li>`;
+                        });
+                    }
+                    document.getElementById('wifi-list').innerHTML = wifiHtml;
+
+                    let rfidHtml = '';
+                    if(data.rfids.length === 0) {
+                        rfidHtml = '<li>Belum ada kartu RFID terdaftar.</li>';
+                    } else {
+                        data.rfids.forEach((r, index) => {
+                            rfidHtml += `<li>Kartu #${index + 1}: <span class="badge">${r}</span></li>`;
+                        });
+                    }
+                    document.getElementById('rfid-list').innerHTML = rfidHtml;
+                })
+                .catch(err => console.error('Gagal mengambil data:', err));
+        }
+    </script>
+</body>
+</html>
+)rawliteral";
+
+#endif
