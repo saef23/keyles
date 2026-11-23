@@ -102,20 +102,33 @@ const char index_html[] PROGMEM = R"rawliteral(
             box-sizing: border-box;
             font-size: 0.95rem;
         }
-        .dur-grid {
+        .proc-item {
+            background: #0f172a;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-top: 10px;
+        }
+        .proc-title {
+            font-weight: bold;
+            font-size: 0.92rem;
+            color: #e2e8f0;
+            margin-bottom: 8px;
+        }
+        .proc-row {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-top: 6px;
+            gap: 8px;
         }
-        .dur-grid input {
-            margin-top: 3px;
-            padding: 8px;
-            font-size: 0.9rem;
+        .proc-field-label {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            margin-bottom: 3px;
+            display: block;
         }
-        .proc-grid select {
+        .proc-item select, .proc-item input {
             margin-top: 0;
-            padding: 7px 8px;
+            padding: 6px 8px;
             font-size: 0.85rem;
         }
         button {
@@ -244,51 +257,142 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
 
             <div class="card">
-                <h3>Durasi & LED / Buzzer Per Proses</h3>
-                <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0;">Atur durasi bunyi/kedip serta nyala ON/OFF di setiap proses.</p>
+                <h3>LED, Interval & Buzzer Per Proses</h3>
+                <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0;">Atur ON/OFF, interval LED (100-2000 ms), dan durasi buzzer (30-1000 ms) per proses.</p>
 
-                <div class="dur-grid">
-                    <div>
-                        <label>Durasi Buzzer (30-1000 ms):</label>
-                        <input type="number" id="buz_ms" min="30" max="1000" step="10" value="80">
-                    </div>
-                    <div>
-                        <label>Interval LED (100-2000 ms):</label>
-                        <input type="number" id="led_ms" min="100" max="2000" step="50" value="500">
+                <div class="proc-item">
+                    <div class="proc-title">Wake-Up</div>
+                    <div class="proc-row">
+                        <div>
+                            <span class="proc-field-label">LED</span>
+                            <select id="led_wakeup"><option value="1">ON</option><option value="0">OFF</option></select>
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Interval LED (ms)</span>
+                            <input type="number" id="lms_wakeup" min="100" max="2000" step="50" value="700">
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Buzzer</span>
+                            <select id="buz_wakeup"><option value="1">ON</option><option value="0">OFF</option></select>
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Durasi Buzzer (ms)</span>
+                            <input type="number" id="bms_wakeup" min="30" max="1000" step="10" value="60">
+                        </div>
                     </div>
                 </div>
 
-                <div class="proc-grid" style="display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:8px; align-items:center; margin-top:14px; font-size:0.85rem;">
-                    <strong>Proses</strong>
-                    <strong style="text-align:center;">LED</strong>
-                    <strong style="text-align:center;">Buzzer</strong>
-
-                    <span>Wake-Up</span>
-                    <select id="led_wakeup"><option value="1">ON</option><option value="0">OFF</option></select>
-                    <select id="buz_wakeup"><option value="1">ON</option><option value="0">OFF</option></select>
-
-                    <span>Standby</span>
-                    <select id="led_standby"><option value="1">ON</option><option value="0">OFF</option></select>
-                    <select id="buz_standby"><option value="1">ON</option><option value="0">OFF</option></select>
-
-                    <span>Wi-Fi ON/OFF</span>
-                    <select id="led_wifi"><option value="1">ON</option><option value="0">OFF</option></select>
-                    <select id="buz_wifi"><option value="1">ON</option><option value="0">OFF</option></select>
-
-                    <span>Kontak RFID</span>
-                    <select id="led_rfid"><option value="1">ON</option><option value="0">OFF</option></select>
-                    <select id="buz_rfid"><option value="1">ON</option><option value="0">OFF</option></select>
-
-                    <span>Mode AP Config</span>
-                    <select id="led_ap"><option value="1">ON</option><option value="0">OFF</option></select>
-                    <select id="buz_ap"><option value="1">ON</option><option value="0">OFF</option></select>
-
-                    <span>Peringatan Oli</span>
-                    <select id="led_oli"><option value="1">ON</option><option value="0">OFF</option></select>
-                    <select id="buz_oli"><option value="1">ON</option><option value="0">OFF</option></select>
+                <div class="proc-item">
+                    <div class="proc-title">Standby</div>
+                    <div class="proc-row">
+                        <div>
+                            <span class="proc-field-label">LED</span>
+                            <select id="led_standby"><option value="1">ON</option><option value="0">OFF</option></select>
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Interval LED (ms)</span>
+                            <input type="number" id="lms_standby" min="100" max="2000" step="50" value="1500">
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Buzzer</span>
+                            <select id="buz_standby"><option value="1">ON</option><option value="0">OFF</option></select>
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Durasi Buzzer (ms)</span>
+                            <input type="number" id="bms_standby" min="30" max="1000" step="10" value="50">
+                        </div>
+                    </div>
                 </div>
 
-                <button type="button" onclick="simpanProsesNotif()">Simpan Durasi & Notifikasi</button>
+                <div class="proc-item">
+                    <div class="proc-title">Wi-Fi ON/OFF</div>
+                    <div class="proc-row">
+                        <div>
+                            <span class="proc-field-label">LED</span>
+                            <select id="led_wifi"><option value="1">ON</option><option value="0">OFF</option></select>
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Interval LED (ms)</span>
+                            <input type="number" id="lms_wifi" min="100" max="2000" step="50" value="200">
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Buzzer</span>
+                            <select id="buz_wifi"><option value="1">ON</option><option value="0">OFF</option></select>
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Durasi Buzzer (ms)</span>
+                            <input type="number" id="bms_wifi" min="30" max="1000" step="10" value="80">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="proc-item">
+                    <div class="proc-title">Kontak RFID</div>
+                    <div class="proc-row">
+                        <div>
+                            <span class="proc-field-label">LED</span>
+                            <select id="led_rfid"><option value="1">ON</option><option value="0">OFF</option></select>
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Interval LED (ms)</span>
+                            <input type="number" id="lms_rfid" min="100" max="2000" step="50" value="200">
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Buzzer</span>
+                            <select id="buz_rfid"><option value="1">ON</option><option value="0">OFF</option></select>
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Durasi Buzzer (ms)</span>
+                            <input type="number" id="bms_rfid" min="30" max="1000" step="10" value="80">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="proc-item">
+                    <div class="proc-title">Mode AP Config</div>
+                    <div class="proc-row">
+                        <div>
+                            <span class="proc-field-label">LED</span>
+                            <select id="led_ap"><option value="1">ON</option><option value="0">OFF</option></select>
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Interval LED (ms)</span>
+                            <input type="number" id="lms_ap" min="100" max="2000" step="50" value="120">
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Buzzer</span>
+                            <select id="buz_ap"><option value="1">ON</option><option value="0">OFF</option></select>
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Durasi Buzzer (ms)</span>
+                            <input type="number" id="bms_ap" min="30" max="1000" step="10" value="100">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="proc-item">
+                    <div class="proc-title">Peringatan Oli</div>
+                    <div class="proc-row">
+                        <div>
+                            <span class="proc-field-label">LED</span>
+                            <select id="led_oli"><option value="1">ON</option><option value="0">OFF</option></select>
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Interval LED (ms)</span>
+                            <input type="number" id="lms_oli" min="100" max="2000" step="50" value="250">
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Buzzer</span>
+                            <select id="buz_oli"><option value="1">ON</option><option value="0">OFF</option></select>
+                        </div>
+                        <div>
+                            <span class="proc-field-label">Durasi Buzzer (ms)</span>
+                            <input type="number" id="bms_oli" min="30" max="1000" step="10" value="150">
+                        </div>
+                    </div>
+                </div>
+
+                <button type="button" onclick="simpanProsesNotif()">Simpan Setelan Per Proses</button>
                 <div id="proses-status" class="status-msg"></div>
             </div>
 
@@ -344,13 +448,12 @@ const char index_html[] PROGMEM = R"rawliteral(
 
         const editableSettingIds = [
             "getar_ms", "btn_ms", "btn_tap",
-            "buz_ms", "led_ms",
-            "led_wakeup", "buz_wakeup",
-            "led_standby", "buz_standby",
-            "led_wifi", "buz_wifi",
-            "led_rfid", "buz_rfid",
-            "led_ap", "buz_ap",
-            "led_oli", "buz_oli"
+            "led_wakeup", "buz_wakeup", "lms_wakeup", "bms_wakeup",
+            "led_standby", "buz_standby", "lms_standby", "bms_standby",
+            "led_wifi", "buz_wifi", "lms_wifi", "bms_wifi",
+            "led_rfid", "buz_rfid", "lms_rfid", "bms_rfid",
+            "led_ap", "buz_ap", "lms_ap", "bms_ap",
+            "led_oli", "buz_oli", "lms_oli", "bms_oli"
         ];
 
         window.onload = function() {
@@ -485,20 +588,30 @@ const char index_html[] PROGMEM = R"rawliteral(
         function simpanProsesNotif() {
             const statusEl = document.getElementById("proses-status");
             const body = new URLSearchParams({
-                buz_ms:      document.getElementById("buz_ms").value,
-                led_ms:      document.getElementById("led_ms").value,
                 led_wakeup:  document.getElementById("led_wakeup").value,
                 buz_wakeup:  document.getElementById("buz_wakeup").value,
+                lms_wakeup:  document.getElementById("lms_wakeup").value,
+                bms_wakeup:  document.getElementById("bms_wakeup").value,
                 led_standby: document.getElementById("led_standby").value,
                 buz_standby: document.getElementById("buz_standby").value,
+                lms_standby: document.getElementById("lms_standby").value,
+                bms_standby: document.getElementById("bms_standby").value,
                 led_wifi:    document.getElementById("led_wifi").value,
                 buz_wifi:    document.getElementById("buz_wifi").value,
+                lms_wifi:    document.getElementById("lms_wifi").value,
+                bms_wifi:    document.getElementById("bms_wifi").value,
                 led_rfid:    document.getElementById("led_rfid").value,
                 buz_rfid:    document.getElementById("buz_rfid").value,
+                lms_rfid:    document.getElementById("lms_rfid").value,
+                bms_rfid:    document.getElementById("bms_rfid").value,
                 led_ap:      document.getElementById("led_ap").value,
                 buz_ap:      document.getElementById("buz_ap").value,
+                lms_ap:      document.getElementById("lms_ap").value,
+                bms_ap:      document.getElementById("bms_ap").value,
                 led_oli:     document.getElementById("led_oli").value,
-                buz_oli:     document.getElementById("buz_oli").value
+                buz_oli:     document.getElementById("buz_oli").value,
+                lms_oli:     document.getElementById("lms_oli").value,
+                bms_oli:     document.getElementById("bms_oli").value
             });
 
             fetch("/saveproses", {
@@ -507,7 +620,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             })
             .then(res => {
                 if (res.ok) {
-                    statusEl.innerHTML = "<span style='color:#22c55e;'>✔ Durasi & Notifikasi tersimpan!</span>";
+                    statusEl.innerHTML = "<span style='color:#22c55e;'>✔ Setelan per proses tersimpan!</span>";
                 } else {
                     statusEl.innerHTML = "<span style='color:#ef4444;'>✖ Gagal menyimpan setelan proses.</span>";
                 }
@@ -581,6 +694,13 @@ const char index_html[] PROGMEM = R"rawliteral(
             }
         }
 
+        function syncNumVal(id, val) {
+            const el = document.getElementById(id);
+            if (el && val !== undefined) {
+                el.value = String(val);
+            }
+        }
+
         function fetchData(forceSyncSens) {
             const otaBtn = document.getElementById("ota-btn");
             if (otaBtn && otaBtn.disabled) return;
@@ -603,11 +723,9 @@ const char index_html[] PROGMEM = R"rawliteral(
                     }
 
                     if (forceSyncSens || !isEditingSens) {
-                        if (data.getar_ms !== undefined) document.getElementById('getar_ms').value = data.getar_ms;
-                        if (data.btn_ms !== undefined) document.getElementById('btn_ms').value = data.btn_ms;
-                        if (data.btn_tap !== undefined) document.getElementById('btn_tap').value = data.btn_tap;
-                        if (data.buz_ms !== undefined) document.getElementById('buz_ms').value = data.buz_ms;
-                        if (data.led_ms !== undefined) document.getElementById('led_ms').value = data.led_ms;
+                        syncNumVal('getar_ms', data.getar_ms);
+                        syncNumVal('btn_ms', data.btn_ms);
+                        syncNumVal('btn_tap', data.btn_tap);
 
                         syncSelectVal('led_wakeup',  data.led_wakeup);
                         syncSelectVal('buz_wakeup',  data.buz_wakeup);
@@ -621,6 +739,19 @@ const char index_html[] PROGMEM = R"rawliteral(
                         syncSelectVal('buz_ap',      data.buz_ap);
                         syncSelectVal('led_oli',     data.led_oli);
                         syncSelectVal('buz_oli',     data.buz_oli);
+
+                        syncNumVal('lms_wakeup',  data.lms_wakeup);
+                        syncNumVal('bms_wakeup',  data.bms_wakeup);
+                        syncNumVal('lms_standby', data.lms_standby);
+                        syncNumVal('bms_standby', data.bms_standby);
+                        syncNumVal('lms_wifi',    data.lms_wifi);
+                        syncNumVal('bms_wifi',    data.bms_wifi);
+                        syncNumVal('lms_rfid',    data.lms_rfid);
+                        syncNumVal('bms_rfid',    data.bms_rfid);
+                        syncNumVal('lms_ap',      data.lms_ap);
+                        syncNumVal('bms_ap',      data.bms_ap);
+                        syncNumVal('lms_oli',     data.lms_oli);
+                        syncNumVal('bms_oli',     data.bms_oli);
                     }
 
                     let wifiHtml = '';
