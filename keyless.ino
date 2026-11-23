@@ -59,17 +59,21 @@ unsigned long durasiStabilGetarMs = 250; // 50 - 2000 ms (makin kecil makin sens
 unsigned long debounceTombolMs    = 60;  // 20 - 500 ms
 int jumlahTapConfigAP             = 3;   // 2 - 5 kali tekan
 
-// Durasi buzzer & interval kedip LED tersimpan di Preferences
-unsigned long durasiBuzzerMs = 80;  // 30 - 1000 ms per ketukan buzzer
-unsigned long intervalLedMs  = 500; // 100 - 2000 ms interval toggle LED
-
 // ==================== SETELAN LED & BUZZER PER PROSES ====================
 bool ledWakeup  = true,  buzWakeup  = true;
-bool ledStandby = true,  buzStandby = true;
+bool ledStandby = false, buzStandby = false;
 bool ledWifi    = true,  buzWifi    = true;
 bool ledRfid    = true,  buzRfid    = true;
 bool ledAp      = true,  buzAp      = true;
 bool ledOli     = true,  buzOli     = true;
+
+// Interval LED (ms, 100 - 2000) & Durasi Buzzer (ms, 30 - 1000) per proses
+unsigned long ledMsWakeup  = 700,  buzMsWakeup  = 60;
+unsigned long ledMsStandby = 1500, buzMsStandby = 50;
+unsigned long ledMsWifi    = 200,  buzMsWifi    = 80;
+unsigned long ledMsRfid    = 200,  buzMsRfid    = 80;
+unsigned long ledMsAp      = 120,  buzMsAp      = 100;
+unsigned long ledMsOli     = 250,  buzMsOli     = 150;
 
 unsigned long totalJamKerjaMenit = 0;
 unsigned long waktuMulaiMesinNyala = 0;
@@ -131,6 +135,12 @@ unsigned long clampIntervalLed(unsigned long val) {
   if (val < 100) return 100;
   if (val > 2000) return 2000;
   return val;
+}
+
+unsigned long parseMsParam(AsyncWebServerRequest *request, const char *name, unsigned long currentVal, bool isBuzzer) {
+  if (!request->hasParam(name, true)) return currentVal;
+  unsigned long v = request->getParam(name, true)->value().toInt();
+  return isBuzzer ? clampDurasiBuzzer(v) : clampIntervalLed(v);
 }
 
 String formatWaktuSingkat() {
@@ -204,17 +214,15 @@ void kedipEventLED(bool aktif, int jumlah, unsigned long onMs, unsigned long off
 
 void updateIndikatorLED() {
   unsigned long sekarang = millis();
-  unsigned long stepLed = clampIntervalLed(intervalLedMs);
 
-  // 4. Mode AP aktif -> kedip cepat (mengikuti intervalLedMs, minimal 120 ms)
+  // 4. Mode AP aktif -> kedip sesuai ledMsAp bila ledAp aktif
   if (wifiApAktif) {
     if (!ledAp) {
       ledState = LOW;
       digitalWrite(PIN_LED_STATUS, LOW);
       return;
     }
-    unsigned long apStep = (stepLed > 240) ? (stepLed / 2) : stepLed;
-    if (apStep < 120) apStep = 120;
+    unsigned long apStep = clampIntervalLed(ledMsAp);
     if (sekarang - lastLedToggle >= apStep) {
       lastLedToggle = sekarang;
       ledState = !ledState;
@@ -223,14 +231,14 @@ void updateIndikatorLED() {
     return;
   }
 
-  // 1. Saat standby -> mati (LOW) atau kedip jika ledStandby aktif
+  // 1. Saat standby -> mati (LOW) atau kedip sesuai ledMsStandby bila ledStandby aktif
   if (berhentiTotalScan) {
     if (!ledStandby) {
       ledState = LOW;
       digitalWrite(PIN_LED_STATUS, LOW);
       return;
     }
-    unsigned long sbStep = stepLed * 2;
+    unsigned long sbStep = clampIntervalLed(ledMsStandby);
     if (sekarang - lastLedToggle >= sbStep) {
       lastLedToggle = sekarang;
       ledState = !ledState;
@@ -246,13 +254,14 @@ void updateIndikatorLED() {
     return;
   }
 
-  // 2. Saat wake up / belum terhubung (cari Wi-Fi) -> kedip sesuai intervalLedMs bila ledWakeup aktif
+  // 2. Saat wake up / belum terhubung (cari Wi-Fi) -> kedip sesuai ledMsWakeup bila ledWakeup aktif
   if (!ledWakeup) {
     ledState = LOW;
     digitalWrite(PIN_LED_STATUS, LOW);
     return;
   }
-  if (sekarang - lastLedToggle >= stepLed) {
+  unsigned long wuStep = clampIntervalLed(ledMsWakeup);
+  if (sekarang - lastLedToggle >= wuStep) {
     lastLedToggle = sekarang;
     ledState = !ledState;
     digitalWrite(PIN_LED_STATUS, ledState ? HIGH : LOW);
@@ -268,18 +277,26 @@ void aktifkanWiFiAP() {
   if (!wifiApAktif) {
     sedangDiModeWakeup = false;
     berhentiTotalScan = false;
+
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    delay(100);
     WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP("ESP32-Keyless-Config", "12345678");
+    delay(100);
+    bool apOk = WiFi.softAP("ESP32-Keyless-Config", "12345678");
+    delay(100);
+
     wifiApAktif = true;
     waktuMulaiAP = millis();
     lastLedToggle = millis();
     ledState = ledAp ? HIGH : LOW;
     digitalWrite(PIN_LED_STATUS, ledState);
-    catetLog("AP Config aktif (SSID: ESP32-Keyless-Config)");
+    catetLog(apOk ? "AP Config aktif (SSID: ESP32-Keyless-Config)" : "AP Config gagal aktif");
 
-    unsigned long jeda = clampDurasiBuzzer(durasiBuzzerMs);
-    kedipEventLED(ledAp, 2, jeda, jeda);
-    bunyiPola(buzAp, 2, jeda, jeda);
+    unsigned long dBuz = clampDurasiBuzzer(buzMsAp);
+    unsigned long dLed = clampIntervalLed(ledMsAp);
+    kedipEventLED(ledAp, 2, dLed, dLed);
+    bunyiPola(buzAp, 2, dBuz, dBuz);
   }
 }
 
@@ -326,13 +343,10 @@ void loadConfigList() {
   if (jumlahTapConfigAP < 2) jumlahTapConfigAP = 2;
   if (jumlahTapConfigAP > 5) jumlahTapConfigAP = 5;
 
-  durasiBuzzerMs = clampDurasiBuzzer(preferences.getULong("buz_ms", 80));
-  intervalLedMs  = clampIntervalLed(preferences.getULong("led_ms", 500));
-
   ledWakeup  = preferences.getBool("led_wu", true);
   buzWakeup  = preferences.getBool("buz_wu", true);
-  ledStandby = preferences.getBool("led_sb", true);
-  buzStandby = preferences.getBool("buz_sb", true);
+  ledStandby = preferences.getBool("led_sb", false);
+  buzStandby = preferences.getBool("buz_sb", false);
   ledWifi    = preferences.getBool("led_wf", true);
   buzWifi    = preferences.getBool("buz_wf", true);
   ledRfid    = preferences.getBool("led_rf", true);
@@ -341,6 +355,19 @@ void loadConfigList() {
   buzAp      = preferences.getBool("buz_ap", true);
   ledOli     = preferences.getBool("led_ol", true);
   buzOli     = preferences.getBool("buz_ol", true);
+
+  ledMsWakeup  = clampIntervalLed(preferences.getULong("lms_wu", 700));
+  buzMsWakeup  = clampDurasiBuzzer(preferences.getULong("bms_wu", 60));
+  ledMsStandby = clampIntervalLed(preferences.getULong("lms_sb", 1500));
+  buzMsStandby = clampDurasiBuzzer(preferences.getULong("bms_sb", 50));
+  ledMsWifi    = clampIntervalLed(preferences.getULong("lms_wf", 200));
+  buzMsWifi    = clampDurasiBuzzer(preferences.getULong("bms_wf", 80));
+  ledMsRfid    = clampIntervalLed(preferences.getULong("lms_rf", 200));
+  buzMsRfid    = clampDurasiBuzzer(preferences.getULong("bms_rf", 80));
+  ledMsAp      = clampIntervalLed(preferences.getULong("lms_ap", 120));
+  buzMsAp      = clampDurasiBuzzer(preferences.getULong("bms_ap", 100));
+  ledMsOli     = clampIntervalLed(preferences.getULong("lms_ol", 250));
+  buzMsOli     = clampDurasiBuzzer(preferences.getULong("bms_ol", 150));
 
   preferences.end();
 }
@@ -360,12 +387,20 @@ void simpanSensitivitas() {
 }
 
 void simpanSetelanProses() {
-  durasiBuzzerMs = clampDurasiBuzzer(durasiBuzzerMs);
-  intervalLedMs  = clampIntervalLed(intervalLedMs);
+  ledMsWakeup  = clampIntervalLed(ledMsWakeup);
+  buzMsWakeup  = clampDurasiBuzzer(buzMsWakeup);
+  ledMsStandby = clampIntervalLed(ledMsStandby);
+  buzMsStandby = clampDurasiBuzzer(buzMsStandby);
+  ledMsWifi    = clampIntervalLed(ledMsWifi);
+  buzMsWifi    = clampDurasiBuzzer(buzMsWifi);
+  ledMsRfid    = clampIntervalLed(ledMsRfid);
+  buzMsRfid    = clampDurasiBuzzer(buzMsRfid);
+  ledMsAp      = clampIntervalLed(ledMsAp);
+  buzMsAp      = clampDurasiBuzzer(buzMsAp);
+  ledMsOli     = clampIntervalLed(ledMsOli);
+  buzMsOli     = clampDurasiBuzzer(buzMsOli);
 
   preferences.begin("wifi_keys", false);
-  preferences.putULong("buz_ms", durasiBuzzerMs);
-  preferences.putULong("led_ms", intervalLedMs);
   preferences.putBool("led_wu", ledWakeup);
   preferences.putBool("buz_wu", buzWakeup);
   preferences.putBool("led_sb", ledStandby);
@@ -378,6 +413,19 @@ void simpanSetelanProses() {
   preferences.putBool("buz_ap", buzAp);
   preferences.putBool("led_ol", ledOli);
   preferences.putBool("buz_ol", buzOli);
+
+  preferences.putULong("lms_wu", ledMsWakeup);
+  preferences.putULong("bms_wu", buzMsWakeup);
+  preferences.putULong("lms_sb", ledMsStandby);
+  preferences.putULong("bms_sb", buzMsStandby);
+  preferences.putULong("lms_wf", ledMsWifi);
+  preferences.putULong("bms_wf", buzMsWifi);
+  preferences.putULong("lms_rf", ledMsRfid);
+  preferences.putULong("bms_rf", buzMsRfid);
+  preferences.putULong("lms_ap", ledMsAp);
+  preferences.putULong("bms_ap", buzMsAp);
+  preferences.putULong("lms_ol", ledMsOli);
+  preferences.putULong("bms_ol", buzMsOli);
   preferences.end();
 }
 
@@ -410,8 +458,6 @@ void setupWebServer() {
                   ",\"getar_ms\":" + String(durasiStabilGetarMs) +
                   ",\"btn_ms\":" + String(debounceTombolMs) +
                   ",\"btn_tap\":" + String(jumlahTapConfigAP) +
-                  ",\"buz_ms\":" + String(durasiBuzzerMs) +
-                  ",\"led_ms\":" + String(intervalLedMs) +
                   ",\"led_wakeup\":" + String(ledWakeup ? 1 : 0) +
                   ",\"buz_wakeup\":" + String(buzWakeup ? 1 : 0) +
                   ",\"led_standby\":" + String(ledStandby ? 1 : 0) +
@@ -424,6 +470,18 @@ void setupWebServer() {
                   ",\"buz_ap\":" + String(buzAp ? 1 : 0) +
                   ",\"led_oli\":" + String(ledOli ? 1 : 0) +
                   ",\"buz_oli\":" + String(buzOli ? 1 : 0) +
+                  ",\"lms_wakeup\":" + String(ledMsWakeup) +
+                  ",\"bms_wakeup\":" + String(buzMsWakeup) +
+                  ",\"lms_standby\":" + String(ledMsStandby) +
+                  ",\"bms_standby\":" + String(buzMsStandby) +
+                  ",\"lms_wifi\":" + String(ledMsWifi) +
+                  ",\"bms_wifi\":" + String(buzMsWifi) +
+                  ",\"lms_rfid\":" + String(ledMsRfid) +
+                  ",\"bms_rfid\":" + String(buzMsRfid) +
+                  ",\"lms_ap\":" + String(ledMsAp) +
+                  ",\"bms_ap\":" + String(buzMsAp) +
+                  ",\"lms_oli\":" + String(ledMsOli) +
+                  ",\"bms_oli\":" + String(buzMsOli) +
                   ",\"wifis\":[";
     for (int i = 0; i < keynumber; i++) {
       json += "{\"ssid\":\"" + escapeJsonString(SSIDkey[i]) + "\",\"bssid\":\"" + escapeJsonString(BSSIDkey[i]) + "\",\"rssi\":" + String(RSSItresh[i]) + "}";
@@ -486,13 +544,6 @@ void setupWebServer() {
   });
 
   server.on("/saveproses", HTTP_POST, [](AsyncWebServerRequest *request){
-    if (request->hasParam("buz_ms", true)) {
-      durasiBuzzerMs = clampDurasiBuzzer(request->getParam("buz_ms", true)->value().toInt());
-    }
-    if (request->hasParam("led_ms", true)) {
-      intervalLedMs = clampIntervalLed(request->getParam("led_ms", true)->value().toInt());
-    }
-
     ledWakeup  = parseBoolParam(request, "led_wakeup",  ledWakeup);
     buzWakeup  = parseBoolParam(request, "buz_wakeup",  buzWakeup);
     ledStandby = parseBoolParam(request, "led_standby", ledStandby);
@@ -506,10 +557,23 @@ void setupWebServer() {
     ledOli     = parseBoolParam(request, "led_oli",     ledOli);
     buzOli     = parseBoolParam(request, "buz_oli",     buzOli);
 
+    ledMsWakeup  = parseMsParam(request, "lms_wakeup",  ledMsWakeup,  false);
+    buzMsWakeup  = parseMsParam(request, "bms_wakeup",  buzMsWakeup,  true);
+    ledMsStandby = parseMsParam(request, "lms_standby", ledMsStandby, false);
+    buzMsStandby = parseMsParam(request, "bms_standby", buzMsStandby, true);
+    ledMsWifi    = parseMsParam(request, "lms_wifi",    ledMsWifi,    false);
+    buzMsWifi    = parseMsParam(request, "bms_wifi",    buzMsWifi,    true);
+    ledMsRfid    = parseMsParam(request, "lms_rfid",    ledMsRfid,    false);
+    buzMsRfid    = parseMsParam(request, "bms_rfid",    buzMsRfid,    true);
+    ledMsAp      = parseMsParam(request, "lms_ap",      ledMsAp,      false);
+    buzMsAp      = parseMsParam(request, "bms_ap",      buzMsAp,      true);
+    ledMsOli     = parseMsParam(request, "lms_oli",     ledMsOli,     false);
+    buzMsOli     = parseMsParam(request, "bms_oli",     buzMsOli,     true);
+
     simpanSetelanProses();
     lastLedToggle = millis();
     updateIndikatorLED();
-    catetLog("Setelan LED & Buzzer disimpan (buz=" + String(durasiBuzzerMs) + "ms, led=" + String(intervalLedMs) + "ms)");
+    catetLog("Setelan LED & Buzzer per proses disimpan");
     request->send(200, "text/plain", "OK");
   });
 
@@ -619,62 +683,64 @@ void setupWebServer() {
 
 // ==================== FUNGSI BUZZER, LED & MODE ====================
 void bunyiWakeupTombol() {
-  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
-  kedipEventLED(ledWakeup, 1, d, 0);
-  bunyiPulsa(buzWakeup, d);
+  unsigned long dBuz = clampDurasiBuzzer(buzMsWakeup);
+  unsigned long dLed = clampIntervalLed(ledMsWakeup);
+  kedipEventLED(ledWakeup, 1, dLed, 0);
+  bunyiPulsa(buzWakeup, dBuz);
 }
 
 void bunyiWakeupGetar() {
-  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
-  unsigned long gap = (d < 80) ? 70 : d;
-  kedipEventLED(ledWakeup, 2, d, gap);
-  bunyiPola(buzWakeup, 2, d, gap);
+  unsigned long dBuz = clampDurasiBuzzer(buzMsWakeup);
+  unsigned long dLed = clampIntervalLed(ledMsWakeup);
+  kedipEventLED(ledWakeup, 2, dLed, dLed);
+  bunyiPola(buzWakeup, 2, dBuz, dBuz);
 }
 
 void bunyiStandby() {
-  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
-  kedipEventLED(ledStandby, 2, d, d);
-  bunyiPola(buzStandby, 3, d, d);
+  unsigned long dBuz = clampDurasiBuzzer(buzMsStandby);
+  unsigned long dLed = clampIntervalLed(ledMsStandby);
+  kedipEventLED(ledStandby, 2, dLed, dLed);
+  bunyiPola(buzStandby, 3, dBuz, dBuz);
 }
 
 void bunyiWifiTerhubung() {
-  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
-  kedipEventLED(ledWifi, 2, d, d);
-  bunyiPola(buzWifi, 2, d, d);
+  unsigned long dBuz = clampDurasiBuzzer(buzMsWifi);
+  unsigned long dLed = clampIntervalLed(ledMsWifi);
+  kedipEventLED(ledWifi, 2, dLed, dLed);
+  bunyiPola(buzWifi, 2, dBuz, dBuz);
 }
 
 void bunyiWifiTerputus() {
-  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
-  unsigned long panjang = d * 3;
-  if (panjang > 1000) panjang = 1000;
-  kedipEventLED(ledWifi, 1, d, 0);
-  bunyiPulsa(buzWifi, panjang);
+  unsigned long dBuz = clampDurasiBuzzer(buzMsWifi);
+  unsigned long dLed = clampIntervalLed(ledMsWifi);
+  kedipEventLED(ledWifi, 1, dLed, 0);
+  bunyiPulsa(buzWifi, dBuz);
 }
 
 void bunyiBuzzerBuka() {
-  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
-  kedipEventLED(ledRfid, 2, d, d);
-  bunyiPola(buzRfid, 2, d, d);
+  unsigned long dBuz = clampDurasiBuzzer(buzMsRfid);
+  unsigned long dLed = clampIntervalLed(ledMsRfid);
+  kedipEventLED(ledRfid, 2, dLed, dLed);
+  bunyiPola(buzRfid, 2, dBuz, dBuz);
 }
 
 void bunyiBuzzerKunci() {
-  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
-  unsigned long panjang = d * 2;
-  if (panjang > 1000) panjang = 1000;
-  kedipEventLED(ledRfid, 1, d, 0);
-  bunyiPulsa(buzRfid, panjang);
+  unsigned long dBuz = clampDurasiBuzzer(buzMsRfid);
+  unsigned long dLed = clampIntervalLed(ledMsRfid);
+  kedipEventLED(ledRfid, 1, dLed, 0);
+  bunyiPulsa(buzRfid, dBuz);
 }
 
 void bunyiPeringatanOli() {
-  unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
-  kedipEventLED(ledOli, 4, d, d);
-  bunyiPola(buzOli, 4, d, d);
+  unsigned long dBuz = clampDurasiBuzzer(buzMsOli);
+  unsigned long dLed = clampIntervalLed(ledMsOli);
+  kedipEventLED(ledOli, 4, dLed, dLed);
+  bunyiPola(buzOli, 4, dBuz, dBuz);
 }
 
 void masukModeStandby() {
   if (sedangOTA) return;
 
-  // Jika belum ada Wi-Fi maupun RFID terdaftar, Config AP wajib dipertahankan
   if (belumAdaKunciTerdaftar()) {
     aktifkanWiFiAP();
     return;
@@ -799,9 +865,10 @@ bool cekRFID() {
       preferences.putInt("rfid_count", rfidCount);
       preferences.end();
       catetLog("Kartu RFID baru tersimpan: " + scannedUID);
-      unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
-      kedipEventLED(ledRfid, 1, d * 2, 0);
-      bunyiPulsa(buzRfid, d * 2);
+      unsigned long dBuz = clampDurasiBuzzer(buzMsRfid);
+      unsigned long dLed = clampIntervalLed(ledMsRfid);
+      kedipEventLED(ledRfid, 1, dLed, 0);
+      bunyiPulsa(buzRfid, dBuz);
     }
     modeSettingWeb = false;
     mfrc522.PICC_HaltA();
@@ -861,9 +928,10 @@ bool cekRFID() {
     return true;
   } else {
     catetLog("RFID UID " + scannedUID + " tidak dikenal");
-    unsigned long d = clampDurasiBuzzer(durasiBuzzerMs);
-    kedipEventLED(ledRfid, 2, d, d);
-    bunyiPola(buzRfid, 2, d, d);
+    unsigned long dBuz = clampDurasiBuzzer(buzMsRfid);
+    unsigned long dLed = clampIntervalLed(ledMsRfid);
+    kedipEventLED(ledRfid, 2, dLed, dLed);
+    bunyiPola(buzRfid, 2, dBuz, dBuz);
   }
 
   mfrc522.PICC_HaltA();
@@ -1043,7 +1111,6 @@ void loop() {
     return;
   }
 
-  // Selama belum ada Wi-Fi & RFID terdaftar dan AP aktif, pertahankan AP tanpa scan berulang
   if (wifiApAktif && belumAdaKunciTerdaftar()) {
     return;
   }
