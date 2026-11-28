@@ -190,6 +190,19 @@ const char index_html[] PROGMEM = R"rawliteral(
             margin-top: 8px;
             min-height: 18px;
         }
+        .tuneup-box {
+            background: #0f172a;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 14px;
+            text-align: center;
+        }
+        .tuneup-box p {
+            margin: 6px 0 0 0;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+        }
     </style>
 </head>
 <body>
@@ -230,6 +243,12 @@ const char index_html[] PROGMEM = R"rawliteral(
                     </div>
                 </div>
                 <p id="oli-warning" style="text-align: center; margin-top: 12px; font-weight: bold; font-size: 0.85rem;"></p>
+
+                <div class="tuneup-box">
+                    <div id="tuneup-badge" style="font-weight:bold; font-size:0.9rem; color:#94a3b8;">Mode Tune-Up: OFF</div>
+                    <button type="button" id="btn-tuneup" class="btn-warning" onclick="toggleTuneUp()" style="margin-top:10px;">Aktifkan Mode Tune-Up</button>
+                    <p>Kontak terkunci ON &amp; timer oli dijeda (auto-off 60 menit). Bisa juga tahan tombol fisik 5 detik.</p>
+                </div>
             </div>
 
             <div class="card">
@@ -242,7 +261,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
 
             <div class="card">
-                <h3>Sensitivitas Getar & Tombol</h3>
+                <h3>Sensitivitas Getar &amp; Tombol</h3>
                 <label>Durasi Stabil Getar (ms) — makin kecil makin sensitif:</label>
                 <input type="number" id="getar_ms" min="50" max="2000" step="10" value="250">
 
@@ -257,7 +276,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
 
             <div class="card">
-                <h3>LED, Interval & Buzzer Per Proses</h3>
+                <h3>LED, Interval &amp; Buzzer Per Proses</h3>
                 <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0;">Atur ON/OFF, interval LED (100-2000 ms), dan durasi buzzer (30-1000 ms) per proses.</p>
 
                 <div class="proc-item">
@@ -419,7 +438,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
 
             <div class="card">
-                <h3>Pemeliharaan & Sistem</h3>
+                <h3>Pemeliharaan &amp; Sistem</h3>
                 <a href="/resetoli"><button class="btn-warning" type="button">Reset Timer Oli Mesin</button></a>
                 <a href="/resetwifi"><button class="btn-danger" type="button" onclick="return confirm('Hapus seluruh konfigurasi?')">Factory Reset</button></a>
                 <a href="/restart"><button type="button" style="background:#475569; color:#fff;">Restart ESP32</button></a>
@@ -441,6 +460,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         let dataRefreshInterval = null;
         let logRefreshInterval = null;
         let isEditingSens = false;
+        let currentTuneUp = false;
 
         let logCursor = 0;
         let isLogPaused = false;
@@ -514,6 +534,35 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (logRefreshInterval) clearInterval(logRefreshInterval);
             dataRefreshInterval = setInterval(() => fetchData(false), 3000);
             logRefreshInterval = setInterval(fetchLogs, 1500);
+        }
+
+        function renderTuneUpUI(active) {
+            currentTuneUp = !!active;
+            const badge = document.getElementById("tuneup-badge");
+            const btn = document.getElementById("btn-tuneup");
+            if (!badge || !btn) return;
+            if (currentTuneUp) {
+                badge.innerHTML = "<span style='color:#eab308;'>🔧 Mode Tune-Up: AKTIF (Kontak ON &amp; Oli Dijeda)</span>";
+                btn.innerText = "Matikan Mode Tune-Up";
+                btn.className = "btn-danger";
+            } else {
+                badge.innerHTML = "<span style='color:#94a3b8;'>Mode Tune-Up: OFF</span>";
+                btn.innerText = "Aktifkan Mode Tune-Up";
+                btn.className = "btn-warning";
+            }
+        }
+
+        function toggleTuneUp() {
+            const target = currentTuneUp ? "0" : "1";
+            fetch("/tuneup", {
+                method: "POST",
+                body: new URLSearchParams({ aktif: target })
+            })
+            .then(res => res.json())
+            .then(data => {
+                renderTuneUpUI(data.tuneup === 1);
+            })
+            .catch(err => console.error("Gagal ubah mode tune-up:", err));
         }
 
         function togglePauseLog() {
@@ -708,6 +757,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             fetch('/getdata')
                 .then(response => response.json())
                 .then(data => {
+                    renderTuneUpUI(data.tuneup === 1);
                     document.getElementById('val-volt').innerText = data.tegangan + ' V';
 
                     let totalMenit = data.total_menit;
