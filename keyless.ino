@@ -47,8 +47,22 @@ const unsigned long TIMEOUT_WAKEUP_KE_STANDBY = 30000; // 30 detik batas pengama
 int hitungScanWakeup = 0;
 const int MAKS_SCAN_WAKEUP = 3; // Maksimal 3 kali scan Wi-Fi saat wake up
 
+// ==================== PENGAMAN ANTI-MATI DI JALAN ====================
 int hitungGagalScanWiFi = 0;
 const int BATAS_TOLERANSI_WIFI = 3;
+const int HYSTERESIS_RSSI_JALAN = 8;                      // Kelonggaran -8 dBm saat sudah terhubung
+const unsigned long MULAI_PERINGATAN_HILANG_MS = 6000;    // 6 detik hilang -> mulai bunyi peringatan
+const unsigned long TIMEOUT_PUTUS_KONTAK_MS    = 15000;   // 15 detik hilang terus -> baru matikan relay
+unsigned long waktuBuzzerPeringatanTerakhir = 0;
+
+// ==================== MODE TUNE-UP (BENGKEL / SERVIS) ====================
+bool modeTuneUp = false;
+unsigned long waktuMulaiTuneUp = 0;
+const unsigned long TIMEOUT_TUNEUP_MS = 3600000; // Auto-off 60 menit (pengaman aki)
+const unsigned long TAHAN_TOMBOL_TUNEUP_MS = 5000; // Tahan tombol 5 detik untuk toggle Tune-Up
+unsigned long waktuMulaiTahanTombol = 0;
+bool sedangMenahanTombolAktif = false;
+bool tahanTombolSudahDipicu = false;
 
 unsigned long waktuGetarMulai = 0;
 unsigned long waktuGetarTerakhir = 0;
@@ -77,10 +91,15 @@ unsigned long ledMsRfid    = 200,  buzMsRfid    = 80;
 unsigned long ledMsAp      = 120,  buzMsAp      = 100;
 unsigned long ledMsOli     = 250,  buzMsOli     = 150;
 
+// ==================== PENGHITUNG JAM KERJA MESIN (2 MODE) ====================
 unsigned long totalJamKerjaMenit = 0;
 unsigned long waktuMulaiMesinNyala = 0;
 const unsigned long INTERVAL_GANTI_OLI_MENIT = 12000;
 bool peringatanOliSudahBunyi = false;
+
+const unsigned long MIN_MENIT_VALID = 5; // Batas minimal 5 menit baru dianggap pemakaian
+unsigned long menitSesiIni = 0;          // Penghitung sementara sebelum tembus 5 menit
+bool sesiSudahValid = false;
 
 float teganganAki = 0.0;
 
@@ -122,6 +141,10 @@ void masukModeWakeup();
 void keluarDariStandby();
 void catetLog(const String &msg);
 void updateIndikatorLED();
+void updateJamOli();
+void bunyiPeringatanOli();
+void aktifkanModeTuneUp();
+void matikanModeTuneUp();
 
 bool belumAdaKunciTerdaftar() {
   return (keynumber == 0 && rfidCount == 0);
@@ -217,6 +240,16 @@ void kedipEventLED(bool aktif, int jumlah, unsigned long onMs, unsigned long off
 void updateIndikatorLED() {
   unsigned long sekarang = millis();
 
+  // Mode Tune-Up aktif -> kedip santai tiap 1000 ms sebagai tanda kontak dikunci ON
+  if (modeTuneUp) {
+    if (sekarang - lastLedToggle >= 1000) {
+      lastLedToggle = sekarang;
+      ledState = !ledState;
+      digitalWrite(PIN_LED_STATUS, ledState ? HIGH : LOW);
+    }
+    return;
+  }
+
   // 4. Mode AP aktif -> kedip sesuai ledMsAp bila ledAp aktif
   if (wifiApAktif) {
     if (!ledAp) {
@@ -303,7 +336,7 @@ void aktifkanWiFiAP() {
 }
 
 void matikanWiFiAP() {
-  if (belumAdaKunciTerdaftar()) return;
+  if (belumAdaKunciTerdaftar() || modeTuneUp) return;
   if (wifiApAktif && !sedangOTA) {
     WiFi.softAPdisconnect(true);
     if (!berhentiTotalScan) {
@@ -316,6 +349,37 @@ void matikanWiFiAP() {
     updateIndikatorLED();
     catetLog("AP Config dimatikan");
   }
+}
+
+void aktifkanModeTuneUp() {
+  if (modeTuneUp) return;
+  modeTuneUp = true;
+  waktuMulaiTuneUp = millis();
+  berhentiTotalScan = false;
+  sedangDiModeWakeup = false;
+  sedangMencari = false;
+  waktuMulaiHilang = 0;
+  hitungGagalScanWiFi = 0;
+
+  digitalWrite(PIN_RELAY_KEYLESS, HIGH);
+  statusTerdeteksiSebelumnya = true;
+  lastLedToggle = millis();
+  ledState = HIGH;
+  digitalWrite(PIN_LED_STATUS, HIGH);
+
+  catetLog("MODE TUNE-UP AKTIF (Kontak dikunci ON, timer oli dijeda)");
+  bunyiPola(true, 3, 70, 70);
+}
+
+void matikanModeTuneUp() {
+  if (!modeTuneUp) return;
+  modeTuneUp = false;
+  waktuMulaiTuneUp = 0;
+  waktuMulaiMesinNyala = millis();
+  lastLedToggle = millis();
+  updateIndikatorLED();
+  catetLog("MODE TUNE-UP NONAKTIF (Kembali ke mode normal)");
+  bunyiPulsa(true, 200);
 }
 
 void loadConfigList() {
@@ -431,6 +495,62 @@ void simpanSetelanProses() {
   preferences.end();
 }
 
+void updateJamOli() {
+  // Jeda penghitungan jam oli selama Mode Tune-Up aktif
+  if (modeTuneUp) {
+    waktuMulaiMesinNyala = millis();
+    return;
+  }
+
+  bool kontakNyala = (digitalRead(PIN_RELAY_KEYLESS) == HIGH);
+
+  if (kontakNyala) {
+    // Cek peringatan ganti oli saat kontak ON
+    if (totalJamKerjaMenit >= INTERVAL_GANTI_OLI_MENIT && !peringatanOliSudahBunyi) {
+      catetLog("Peringatan ganti oli (>= 200 jam)");
+      bunyiPeringatanOli();
+      peringatanOliSudahBunyi = true;
+    }
+
+    // Hitung tiap 60.000 ms (1 menit) di RAM
+    if (millis() - waktuMulaiMesinNyala >= 60000) {
+      unsigned long selisihMenit = (millis() - waktuMulaiMesinNyala) / 60000;
+      waktuMulaiMesinNyala += selisihMenit * 60000;
+
+      if (!sesiSudahValid) {
+        // MODE 1: Belum tembus 5 menit (tampung sementara di RAM)
+        menitSesiIni += selisihMenit;
+        if (menitSesiIni >= MIN_MENIT_VALID) {
+          sesiSudahValid = true;
+          totalJamKerjaMenit += menitSesiIni;
+          menitSesiIni = 0;
+          catetLog("Sesi >= 5 menit: jam oli mulai dihitung");
+        }
+      } else {
+        // MODE 2: Sudah lewat 5 menit (langsung masuk hitungan di RAM)
+        totalJamKerjaMenit += selisihMenit;
+      }
+
+      // Cek ulang jika batas 200 jam tercapai di tengah jalan
+      if (totalJamKerjaMenit >= INTERVAL_GANTI_OLI_MENIT && !peringatanOliSudahBunyi) {
+        catetLog("Peringatan ganti oli (>= 200 jam)");
+        bunyiPeringatanOli();
+        peringatanOliSudahBunyi = true;
+      }
+    }
+  } else {
+    // Saat kontak mati: simpan ke flash hanya jika sesi sempat tembus >= 5 menit
+    if (sesiSudahValid) {
+      simpanJamOli();
+      catetLog("Jam oli disimpan ke flash: " + String(totalJamKerjaMenit) + " menit");
+    }
+    // Reset variabel sesi (kalau < 5 menit otomatis terbuang & tidak ditulis ke flash)
+    menitSesiIni = 0;
+    sesiSudahValid = false;
+    waktuMulaiMesinNyala = millis();
+  }
+}
+
 void setupWebServer() {
   WiFi.mode(WIFI_STA);
   wifiApAktif = false;
@@ -443,7 +563,7 @@ void setupWebServer() {
     if (request->hasParam("user", true) && request->hasParam("pass", true)) {
       String u = request->getParam("user", true)->value();
       String p = request->getParam("pass", true)->value();
-      if (u == "admin" && p == "1234") {
+      if (u == "sikat miring" && p == "135790") {
         request->send(200, "text/plain", "OK");
       } else {
         request->send(401, "text/plain", "Gagal");
@@ -453,10 +573,22 @@ void setupWebServer() {
     }
   });
 
+  server.on("/tuneup", HTTP_POST, [](AsyncWebServerRequest *request){
+    bool aktif = parseBoolParam(request, "aktif", !modeTuneUp);
+    if (aktif) {
+      aktifkanModeTuneUp();
+    } else {
+      matikanModeTuneUp();
+    }
+    String json = "{\"tuneup\":" + String(modeTuneUp ? 1 : 0) + "}";
+    request->send(200, "application/json", json);
+  });
+
   server.on("/getdata", HTTP_GET, [](AsyncWebServerRequest *request){
     bacaTeganganAki();
     String json = "{\"total_menit\":" + String(totalJamKerjaMenit) +
                   ",\"tegangan\":" + String(teganganAki, 1) +
+                  ",\"tuneup\":" + String(modeTuneUp ? 1 : 0) +
                   ",\"getar_ms\":" + String(durasiStabilGetarMs) +
                   ",\"btn_ms\":" + String(debounceTombolMs) +
                   ",\"btn_tap\":" + String(jumlahTapConfigAP) +
@@ -621,6 +753,8 @@ void setupWebServer() {
 
   server.on("/resetoli", HTTP_GET, [](AsyncWebServerRequest *request){
     totalJamKerjaMenit = 0;
+    menitSesiIni = 0;
+    sesiSudahValid = false;
     peringatanOliSudahBunyi = false;
     simpanJamOli();
     catetLog("Timer oli direset ke 0");
@@ -741,7 +875,7 @@ void bunyiPeringatanOli() {
 }
 
 void masukModeStandby() {
-  if (sedangOTA) return;
+  if (sedangOTA || modeTuneUp) return;
 
   if (belumAdaKunciTerdaftar()) {
     aktifkanWiFiAP();
@@ -760,8 +894,10 @@ void masukModeStandby() {
   rfidKontakState = false;
   hitungGagalScanWiFi = 0;
   hitungScanWakeup = 0;
+  waktuMulaiHilang = 0;
 
   digitalWrite(PIN_RELAY_KEYLESS, LOW);
+  updateJamOli();
   matikanWiFiAP();
   WiFi.mode(WIFI_OFF);
   mfrc522.PCD_SoftPowerDown();
@@ -813,6 +949,8 @@ void keluarDariStandby() {
 void runDetected() {
   sedangDiModeWakeup = false;
   hitungScanWakeup = 0;
+  waktuMulaiHilang = 0;
+  sedangMencari = false;
   digitalWrite(PIN_RELAY_KEYLESS, HIGH);
   digitalWrite(PIN_LED_STATUS, LOW);
 
@@ -821,26 +959,19 @@ void runDetected() {
     bunyiWifiTerhubung();
     statusTerdeteksiSebelumnya = true;
     waktuMulaiMesinNyala = millis();
-    if (totalJamKerjaMenit >= INTERVAL_GANTI_OLI_MENIT && !peringatanOliSudahBunyi) {
-      catetLog("Peringatan ganti oli (>= 200 jam)");
-      bunyiPeringatanOli();
-      peringatanOliSudahBunyi = true;
-    }
-  } else {
-    if (millis() - waktuMulaiMesinNyala >= 60000) {
-      totalJamKerjaMenit++;
-      waktuMulaiMesinNyala = millis();
-    }
   }
 }
 
 void runNotDetected() {
+  if (modeTuneUp) return;
   digitalWrite(PIN_RELAY_KEYLESS, LOW);
   if (statusTerdeteksiSebelumnya) {
-    catetLog("Wi-Fi terputus -> Relay OFF, masuk WAKE UP");
+    catetLog("Wi-Fi hilang >15 detik -> Relay OFF, masuk WAKE UP");
     bunyiWifiTerputus();
     statusTerdeteksiSebelumnya = false;
-    simpanJamOli();
+    waktuMulaiHilang = 0;
+    sedangMencari = false;
+    updateJamOli();
     matikanWiFiAP();
     masukModeWakeup();
   }
@@ -889,9 +1020,11 @@ bool cekRFID() {
 
   if (rfidAktif && kartuCocok) {
     catetLog("RFID UID " + scannedUID + " cocok");
-    if (rfidKontakState) {
+    if (rfidKontakState || modeTuneUp) {
+      if (modeTuneUp) matikanModeTuneUp();
       rfidKontakState = false;
       digitalWrite(PIN_RELAY_KEYLESS, LOW);
+      updateJamOli();
       catetLog("Kontak RFID dimatikan");
       bunyiBuzzerKunci();
       matikanWiFiAP();
@@ -925,7 +1058,8 @@ bool cekRFID() {
     sedangMenungguStandbyRFID = false;
     siapBangunGetar = false;
     hitungGagalScanWiFi = 0;
-    waktuMulaiHilang = millis();
+    waktuMulaiHilang = 0;
+    sedangMencari = false;
     statusTerdeteksiSebelumnya = true;
 
     mfrc522.PICC_HaltA();
@@ -943,7 +1077,7 @@ bool cekRFID() {
 }
 
 void detectwifi() {
-  if (berhentiTotalScan || rfidKontakState || sedangMenungguStandbyRFID || sedangOTA) return;
+  if (berhentiTotalScan || rfidKontakState || sedangMenungguStandbyRFID || sedangOTA || modeTuneUp) return;
 
   if (belumAdaKunciTerdaftar()) {
     aktifkanWiFiAP();
@@ -954,12 +1088,15 @@ void detectwifi() {
   int n = WiFi.scanNetworks();
   bool found = false;
 
+  // Saat sudah terhubung, beri kelonggaran hysteresis -8 dBm agar tidak mudah putus saat HP di saku
+  int kelonggaranRssi = statusTerdeteksiSebelumnya ? HYSTERESIS_RSSI_JALAN : 0;
+
   for (int i = 0; i < n; ++i) {
     String scannedSSID = WiFi.SSID(i);
     int scannedRSSI = WiFi.RSSI(i);
 
     for (int j = 0; j < keynumber; ++j) {
-      if (scannedSSID == SSIDkey[j] && scannedRSSI >= RSSItresh[j]) {
+      if (scannedSSID == SSIDkey[j] && scannedRSSI >= (RSSItresh[j] - kelonggaranRssi)) {
         found = true;
         break;
       }
@@ -971,6 +1108,8 @@ void detectwifi() {
   if (found) {
     if (sedangDiModeWakeup) {
       catetLog("Scan Wi-Fi #" + String(hitungScanWakeup + 1) + " -> COCOK (SSID & RSSI)");
+    } else if (sedangMencari) {
+      catetLog("Sinyal Wi-Fi kembali stabil, kontak tetap ON");
     }
     sedangDiModeWakeup = false;
     hitungScanWakeup = 0;
@@ -987,16 +1126,39 @@ void detectwifi() {
         masukModeStandby();
         return;
       }
-    } else {
+    } else if (statusTerdeteksiSebelumnya) {
+      unsigned long sekarang = millis();
       hitungGagalScanWiFi++;
+
+      // Mulai hitung waktu hilang setelah 3x gagal scan berturut-turut (abaikan drop 1-2 detik)
       if (hitungGagalScanWiFi >= BATAS_TOLERANSI_WIFI) {
-        runNotDetected();
+        if (!sedangMencari) {
+          sedangMencari = true;
+          waktuMulaiHilang = sekarang;
+          waktuBuzzerPeringatanTerakhir = 0;
+          catetLog("Sinyal Wi-Fi melemah/hilang, tunggu 15 detik sebelum mematikan kontak...");
+        }
+
+        unsigned long durasiHilang = sekarang - waktuMulaiHilang;
+
+        // Setelah 6 detik hilang, beri beep peringatan tiap 2 detik
+        if (durasiHilang >= MULAI_PERINGATAN_HILANG_MS && durasiHilang < TIMEOUT_PUTUS_KONTAK_MS) {
+          if (sekarang - waktuBuzzerPeringatanTerakhir >= 2000) {
+            waktuBuzzerPeringatanTerakhir = sekarang;
+            bunyiPulsa(buzWifi, 50);
+          }
+        }
+
+        // Baru matikan kontak setelah hilang terus-menerus selama 15 detik
+        if (durasiHilang >= TIMEOUT_PUTUS_KONTAK_MS) {
+          runNotDetected();
+        }
       }
     }
   }
 
   updateIndikatorLED();
-  delay(500);
+  delay(200);
 }
 
 void setup() {
@@ -1032,16 +1194,26 @@ void loop() {
     return;
   }
 
+  // Cek batas waktu pengaman Mode Tune-Up (60 menit)
+  if (modeTuneUp) {
+    digitalWrite(PIN_RELAY_KEYLESS, HIGH);
+    if (sekarang - waktuMulaiTuneUp >= TIMEOUT_TUNEUP_MS) {
+      catetLog("Timeout Mode Tune-Up (60 menit) -> otomatis nonaktif");
+      matikanModeTuneUp();
+    }
+  }
+
   if (belumAdaKunciTerdaftar()) {
     aktifkanWiFiAP();
-  } else if (wifiApAktif && (sekarang - waktuMulaiAP >= TIMEOUT_AP_AUTO_OFF)) {
+  } else if (wifiApAktif && !modeTuneUp && (sekarang - waktuMulaiAP >= TIMEOUT_AP_AUTO_OFF)) {
     matikanWiFiAP();
   }
 
   updateIndikatorLED();
+  updateJamOli();
 
   // ==================== MODE STANDBY (SCAN WIFI & RFID OFF) ====================
-  if (berhentiTotalScan) {
+  if (berhentiTotalScan && !modeTuneUp) {
     if (WiFi.getMode() != WIFI_OFF && !wifiApAktif) {
       WiFi.mode(WIFI_OFF);
     }
@@ -1084,8 +1256,8 @@ void loop() {
     return;
   }
 
-  // ==================== MODE AKTIF / WAKE UP (WIFI & RFID ON) ====================
-  if (sedangDiModeWakeup && !statusTerdeteksiSebelumnya && !rfidKontakState && !wifiApAktif && !modeSettingWeb) {
+  // ==================== MODE AKTIF / WAKE UP / TUNE-UP ====================
+  if (!modeTuneUp && sedangDiModeWakeup && !statusTerdeteksiSebelumnya && !rfidKontakState && !wifiApAktif && !modeSettingWeb) {
     if (sekarang - waktuMasukModeWakeup >= TIMEOUT_WAKEUP_KE_STANDBY) {
       catetLog("Timeout mode wake-up -> STANDBY");
       masukModeStandby();
@@ -1101,6 +1273,10 @@ void loop() {
     if (reading != debouncedButtonState) {
       debouncedButtonState = reading;
       if (debouncedButtonState == LOW) {
+        waktuMulaiTahanTombol = sekarang;
+        sedangMenahanTombolAktif = true;
+        tahanTombolSudahDipicu = false;
+
         if (sekarang - waktuButtonTapPertama > 2500) buttonTapCount = 0;
         if (buttonTapCount == 0) waktuButtonTapPertama = sekarang;
         buttonTapCount++;
@@ -1108,6 +1284,22 @@ void loop() {
           buttonTapCount = 0;
           waktuButtonTapPertama = 0;
           aktifkanWiFiAP();
+        }
+      } else {
+        sedangMenahanTombolAktif = false;
+        tahanTombolSudahDipicu = false;
+      }
+    }
+
+    // Cek tahan tombol 5 detik untuk toggle Mode Tune-Up
+    if (debouncedButtonState == LOW && sedangMenahanTombolAktif && !tahanTombolSudahDipicu) {
+      if (sekarang - waktuMulaiTahanTombol >= TAHAN_TOMBOL_TUNEUP_MS) {
+        tahanTombolSudahDipicu = true;
+        buttonTapCount = 0;
+        if (modeTuneUp) {
+          matikanModeTuneUp();
+        } else if (statusTerdeteksiSebelumnya || rfidKontakState || wifiApAktif) {
+          aktifkanModeTuneUp();
         }
       }
     }
@@ -1124,7 +1316,7 @@ void loop() {
     return;
   }
 
-  if (!rfidKontakState && !modeSettingWeb) {
+  if (!rfidKontakState && !modeSettingWeb && !modeTuneUp) {
     detectwifi();
   }
 }
